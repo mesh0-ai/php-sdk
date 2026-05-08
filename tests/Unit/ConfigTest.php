@@ -40,4 +40,65 @@ final class ConfigTest extends TestCase
         $this->expectException(ConfigurationException::class);
         new Config(apiKey: 'm0_abcde_aaaaaaaaaaaaaaaaaaaaaaaa', maxRetries: -1);
     }
+
+    public function testRejectsEmptyMetricsAgentHost(): void
+    {
+        $this->expectException(ConfigurationException::class);
+        new Config(apiKey: 'm0_abcde_aaaaaaaaaaaaaaaaaaaaaaaa', metricsAgentHost: '');
+    }
+
+    public function testRejectsMetricsAgentPortBelowOne(): void
+    {
+        $this->expectException(ConfigurationException::class);
+        new Config(apiKey: 'm0_abcde_aaaaaaaaaaaaaaaaaaaaaaaa', metricsAgentPort: 0);
+    }
+
+    public function testRejectsMetricsAgentPortAbove65535(): void
+    {
+        $this->expectException(ConfigurationException::class);
+        new Config(apiKey: 'm0_abcde_aaaaaaaaaaaaaaaaaaaaaaaa', metricsAgentPort: 65536);
+    }
+
+    public function testFromEnvReadsMetricsAgentVars(): void
+    {
+        \putenv('MESH0_API_KEY=m0_abcde_aaaaaaaaaaaaaaaaaaaaaaaa');
+        \putenv('MESH0_AGENT_HOST=10.0.0.1');
+        \putenv('MESH0_AGENT_PORT=9000');
+        try {
+            $c = Config::fromEnv();
+            $this->assertSame('10.0.0.1', $c->metricsAgentHost);
+            $this->assertSame(9000, $c->metricsAgentPort);
+        } finally {
+            \putenv('MESH0_API_KEY');
+            \putenv('MESH0_AGENT_HOST');
+            \putenv('MESH0_AGENT_PORT');
+        }
+    }
+
+    public function testFromEnvRejectsMalformedAgentPort(): void
+    {
+        \putenv('MESH0_API_KEY=m0_abcde_aaaaaaaaaaaaaaaaaaaaaaaa');
+        \putenv('MESH0_AGENT_PORT=not-a-port');
+        try {
+            $this->expectException(ConfigurationException::class);
+            Config::fromEnv();
+        } finally {
+            \putenv('MESH0_API_KEY');
+            \putenv('MESH0_AGENT_PORT');
+        }
+    }
+
+    public function testFromEnvFallsBackToDefaultsWhenAgentVarsUnset(): void
+    {
+        \putenv('MESH0_API_KEY=m0_abcde_aaaaaaaaaaaaaaaaaaaaaaaa');
+        \putenv('MESH0_AGENT_HOST');
+        \putenv('MESH0_AGENT_PORT');
+        try {
+            $c = Config::fromEnv();
+            $this->assertSame(Config::DEFAULT_METRICS_AGENT_HOST, $c->metricsAgentHost);
+            $this->assertSame(Config::DEFAULT_METRICS_AGENT_PORT, $c->metricsAgentPort);
+        } finally {
+            \putenv('MESH0_API_KEY');
+        }
+    }
 }

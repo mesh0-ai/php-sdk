@@ -166,6 +166,45 @@ $spans = $mesh0->traces->get($traceId);
 
 ---
 
+## Metrics (statsd / DogStatsD over UDP)
+
+For high-frequency counters, gauges, and timings — the kind of telemetry that
+shouldn't go through the request-blocking HTTPS path — point at a co-located
+[mesh0 metrics-agent](https://github.com/mesh0-ai/metrics-agent) sidecar:
+
+```php
+$metrics = $mesh0->metrics(); // UDP 127.0.0.1:8125 by default
+
+$metrics->increment('checkout.charge', tags: ['tier' => 'pro']);
+$metrics->gauge('queue.depth', 42);
+$metrics->timing('db.query_ms', 12.4, tags: ['table' => 'orders']);
+$metrics->histogram('upload.bytes', 8192);
+
+// Convenience: time a block; metric is emitted whether $fn returns or throws.
+$rows = $metrics->time('db.select_ms', fn () => $pdo->query($sql)->fetchAll());
+```
+
+The UDP socket is opened lazily on the first send, so `$mesh0->metrics()` does
+no I/O. Override the agent address via `Config` (or `MESH0_AGENT_HOST` /
+`MESH0_AGENT_PORT`):
+
+```php
+$metrics = $mesh0->metrics(host: 'mesh0-agent', port: 9125, defaultTags: [
+    'service' => 'checkout',
+    'env'     => 'prod',
+]);
+```
+
+UDP send failures (peer unreachable, agent not running) are swallowed — the
+request path never throws on transport. Pass an optional PSR-3 logger to
+`new UdpMetricSink(host, port, logger)` to surface a single warning per state
+transition. Malformed metric names or tags do throw `ConfigurationException`
+so programmer errors fail loudly in development rather than silently
+disappearing. `sampleRate` outside `(0, 1]` is clamped (≤0 drops, ≥1 always
+emits) rather than throwing.
+
+---
+
 ## Querying
 
 ```php
@@ -212,8 +251,10 @@ $mesh0 = new Client(new Config(
 
 | Variable          | Description                                         |
 | ----------------- | --------------------------------------------------- |
-| `MESH0_API_KEY`   | API key (`m0_<routing>_<secret>`). **Required.**    |
-| `MESH0_BASE_URL`  | Override base URL (self-hosted deployments).        |
+| `MESH0_API_KEY`     | API key (`m0_<routing>_<secret>`). **Required.**  |
+| `MESH0_BASE_URL`    | Override base URL (self-hosted deployments).      |
+| `MESH0_AGENT_HOST`  | metrics-agent host (default `127.0.0.1`).         |
+| `MESH0_AGENT_PORT`  | metrics-agent UDP port (default `8125`).          |
 
 ### Custom HTTP client
 

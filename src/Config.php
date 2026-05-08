@@ -20,6 +20,8 @@ final class Config
     public const DEFAULT_CONNECT_TIMEOUT = 5.0;
     public const DEFAULT_MAX_RETRIES = 2;
     public const DEFAULT_USER_AGENT = 'mesh0-php-sdk/0.1.0';
+    public const DEFAULT_METRICS_AGENT_HOST = '127.0.0.1';
+    public const DEFAULT_METRICS_AGENT_PORT = 8125;
 
     /** @var array<string, string> */
     public readonly array $defaultHeaders;
@@ -32,6 +34,8 @@ final class Config
      * @param int                   $maxRetries     Retries for idempotent failures (network / 5xx / 429).
      * @param string                $userAgent      User-Agent header value.
      * @param array<string, string> $defaultHeaders Extra headers added to every request.
+     * @param string                $metricsAgentHost Host of the local metrics-agent (statsd UDP target).
+     * @param int                   $metricsAgentPort Port of the local metrics-agent.
      */
     public function __construct(
         public readonly string $apiKey,
@@ -41,6 +45,8 @@ final class Config
         public readonly int $maxRetries = self::DEFAULT_MAX_RETRIES,
         public readonly string $userAgent = self::DEFAULT_USER_AGENT,
         array $defaultHeaders = [],
+        public readonly string $metricsAgentHost = self::DEFAULT_METRICS_AGENT_HOST,
+        public readonly int $metricsAgentPort = self::DEFAULT_METRICS_AGENT_PORT,
     ) {
         if ($apiKey === '') {
             throw new ConfigurationException('apiKey must not be empty');
@@ -60,6 +66,12 @@ final class Config
         if ($maxRetries < 0) {
             throw new ConfigurationException('maxRetries must be >= 0');
         }
+        if ($metricsAgentHost === '') {
+            throw new ConfigurationException('metricsAgentHost must not be empty');
+        }
+        if ($metricsAgentPort < 1 || $metricsAgentPort > 65535) {
+            throw new ConfigurationException('metricsAgentPort must be in 1..65535');
+        }
 
         $this->defaultHeaders = $defaultHeaders;
     }
@@ -76,10 +88,24 @@ final class Config
             throw new ConfigurationException('MESH0_API_KEY is not set');
         }
         $base = getenv('MESH0_BASE_URL');
+        $agentHost = getenv('MESH0_AGENT_HOST');
+        $agentPort = getenv('MESH0_AGENT_PORT');
+
+        $port = self::DEFAULT_METRICS_AGENT_PORT;
+        if ($agentPort !== false && $agentPort !== '') {
+            if (!ctype_digit($agentPort)) {
+                throw new ConfigurationException('MESH0_AGENT_PORT must be a positive integer');
+            }
+            $port = (int) $agentPort;
+        }
 
         return new self(
             apiKey: $key,
             baseUrl: ($base === false || $base === '') ? self::DEFAULT_BASE_URL : $base,
+            metricsAgentHost: ($agentHost === false || $agentHost === '')
+                ? self::DEFAULT_METRICS_AGENT_HOST
+                : $agentHost,
+            metricsAgentPort: $port,
         );
     }
 }

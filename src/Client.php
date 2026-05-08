@@ -6,6 +6,9 @@ namespace Mesh0;
 
 use Mesh0\Http\Transport;
 use Mesh0\Logger\Mesh0Logger;
+use Mesh0\Metrics\Metrics;
+use Mesh0\Metrics\MetricSink;
+use Mesh0\Metrics\UdpMetricSink;
 use Mesh0\Resource\Events;
 use Mesh0\Resource\Meta;
 use Mesh0\Resource\Query;
@@ -40,6 +43,7 @@ final class Client
     public readonly Meta $meta;
 
     private readonly Transport $transport;
+    private ?Metrics $metrics = null;
 
     public function __construct(
         public readonly Config $config,
@@ -89,6 +93,42 @@ final class Client
     public function meta(): Meta
     {
         return $this->meta;
+    }
+
+    /**
+     * Return a metrics client targeting a co-located mesh0 metrics-agent.
+     *
+     * The agent listens on UDP (default `127.0.0.1:8125`) and forwards
+     * counters, gauges, and timings to mesh0 over HTTPS. The UDP socket is
+     * opened lazily on the first `send()` so calling this method does no I/O.
+     *
+     * Subsequent calls without arguments return the same instance. Pass `host`
+     * or `port` to build a fresh `Metrics` against a different agent (or pass
+     * a custom `MetricSink` to bypass UDP entirely, e.g. in tests).
+     *
+     * Defaults read from `Config::metricsAgentHost` / `metricsAgentPort` (which
+     * in turn pick up `MESH0_AGENT_HOST` / `MESH0_AGENT_PORT` via
+     * `Config::fromEnv()`).
+     *
+     * @param array<string, string|int|float> $defaultTags Tags merged into every metric.
+     */
+    public function metrics(
+        ?string $host = null,
+        ?int $port = null,
+        array $defaultTags = [],
+        ?MetricSink $sink = null,
+    ): Metrics {
+        if ($sink !== null || $host !== null || $port !== null || $defaultTags !== []) {
+            $effectiveSink = $sink ?? new UdpMetricSink(
+                $host ?? $this->config->metricsAgentHost,
+                $port ?? $this->config->metricsAgentPort,
+            );
+            return new Metrics($effectiveSink, $defaultTags);
+        }
+        return $this->metrics ??= new Metrics(new UdpMetricSink(
+            $this->config->metricsAgentHost,
+            $this->config->metricsAgentPort,
+        ));
     }
 
     /**
