@@ -69,8 +69,13 @@ final class RecordingLogger implements LoggerInterface
      */
     public function log($level, \Stringable|string $message, array $context = []): void
     {
+        $levelString = match (true) {
+            \is_string($level) => $level,
+            $level instanceof \Stringable => (string) $level,
+            default => 'unknown',
+        };
         $this->records[] = [
-            'level' => (string) $level,
+            'level' => $levelString,
             'message' => (string) $message,
             'context' => $context,
         ];

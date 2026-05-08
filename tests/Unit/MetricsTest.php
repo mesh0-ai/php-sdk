@@ -194,14 +194,16 @@ final class MetricsTest extends TestCase
 
     public function testTimeBlockEmitsTimingEvenWhenCallableThrows(): void
     {
+        $caught = null;
         try {
             $this->metrics->time('block_ms', static function (): void {
                 throw new \RuntimeException('boom');
             });
-            $this->fail('exception not propagated');
         } catch (\RuntimeException $e) {
-            $this->assertSame('boom', $e->getMessage());
+            $caught = $e;
         }
+        $this->assertNotNull($caught, 'exception not propagated');
+        $this->assertSame('boom', $caught->getMessage());
         $this->assertCount(1, $this->sink->packets);
     }
 
