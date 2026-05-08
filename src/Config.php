@@ -34,8 +34,8 @@ final class Config
      * @param int                   $maxRetries     Retries for idempotent failures (network / 5xx / 429).
      * @param string                $userAgent      User-Agent header value.
      * @param array<string, string> $defaultHeaders Extra headers added to every request.
-     * @param string                $metricsAgentHost Host of the local metrics-agent (statsd UDP target).
-     * @param int                   $metricsAgentPort Port of the local metrics-agent.
+     * @param string                $metricsAgentHost Host of the local metrics-agent (UDP target for metrics + events).
+     * @param int                   $metricsAgentPort Port of the local metrics-agent (single port for both metrics and events).
      */
     public function __construct(
         public readonly string $apiKey,

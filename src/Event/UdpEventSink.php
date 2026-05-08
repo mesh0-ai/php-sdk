@@ -60,11 +60,7 @@ final class UdpEventSink
     {
         $e = $event instanceof EventBuilder ? $event->build() : $event;
 
-        try {
-            $payload = \json_encode($e->toArray(), \JSON_UNESCAPED_SLASHES | \JSON_UNESCAPED_UNICODE);
-        } catch (\Throwable) {
-            $payload = false;
-        }
+        $payload = \json_encode($e->toArray(), \JSON_UNESCAPED_SLASHES | \JSON_UNESCAPED_UNICODE);
         if (!\is_string($payload)) {
             return;
         }
