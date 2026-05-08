@@ -91,15 +91,21 @@ final class Config
         $agentHost = getenv('MESH0_AGENT_HOST');
         $agentPort = getenv('MESH0_AGENT_PORT');
 
+        $port = self::DEFAULT_METRICS_AGENT_PORT;
+        if ($agentPort !== false && $agentPort !== '') {
+            if (!ctype_digit($agentPort)) {
+                throw new ConfigurationException('MESH0_AGENT_PORT must be a positive integer');
+            }
+            $port = (int) $agentPort;
+        }
+
         return new self(
             apiKey: $key,
             baseUrl: ($base === false || $base === '') ? self::DEFAULT_BASE_URL : $base,
             metricsAgentHost: ($agentHost === false || $agentHost === '')
                 ? self::DEFAULT_METRICS_AGENT_HOST
                 : $agentHost,
-            metricsAgentPort: ($agentPort === false || $agentPort === '' || !ctype_digit($agentPort))
-                ? self::DEFAULT_METRICS_AGENT_PORT
-                : (int) $agentPort,
+            metricsAgentPort: $port,
         );
     }
 }

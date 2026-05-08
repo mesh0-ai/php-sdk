@@ -195,6 +195,14 @@ $metrics = $mesh0->metrics(host: 'mesh0-agent', port: 9125, defaultTags: [
 ]);
 ```
 
+UDP send failures (peer unreachable, agent not running) are swallowed — the
+request path never throws on transport. Pass an optional PSR-3 logger to
+`new UdpMetricSink(host, port, logger)` to surface a single warning per state
+transition. Malformed metric names or tags do throw `ConfigurationException`
+so programmer errors fail loudly in development rather than silently
+disappearing. `sampleRate` outside `(0, 1]` is clamped (≤0 drops, ≥1 always
+emits) rather than throwing.
+
 ---
 
 ## Querying

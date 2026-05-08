@@ -82,28 +82,41 @@ final class MetricsTest extends TestCase
 
     public function testSampleRateIsAppendedWhenLessThanOne(): void
     {
-        // Force the sample to fire deterministically by always passing through.
-        // We can't seed mt_rand portably, so use sampleRate = 1.0 - epsilon and
-        // check that when it does fire, the packet carries the @rate token.
-        // Instead, exercise the formatter directly via a guaranteed path:
+        // Seed mt_rand so the trial below always passes the gate.
+        \mt_srand(1);
         $metrics = new Metrics($this->sink);
-        // sampleRate = 1.0 always emits; bump down and loop to flush the random.
-        // To keep the test deterministic, just verify the format when emit fires:
-        // we run many trials; with rate 0.999 we'll near-certainly see one packet.
-        for ($i = 0; $i < 200 && $this->sink->packets === []; $i++) {
-            $metrics->timing('latency_ms', 10, [], 0.5);
+
+        // With sampleRate close to 1.0, mt_rand()/mt_getrandmax() < rate is
+        // overwhelmingly likely; loop briefly to be robust against the seed.
+        for ($i = 0; $i < 50 && $this->sink->packets === []; $i++) {
+            $metrics->timing('latency_ms', 10, [], 0.999);
         }
-        $this->assertNotEmpty($this->sink->packets, 'expected at least one sampled packet');
-        foreach ($this->sink->packets as $packet) {
-            $this->assertStringContainsString('|@0.5', $packet);
-            $this->assertStringStartsWith('latency_ms:10|ms|@0.5', $packet);
-        }
+        $this->assertNotEmpty($this->sink->packets);
+        $this->assertStringStartsWith('latency_ms:10|ms|@0.999', $this->sink->packets[0]);
     }
 
-    public function testSampleRateOutOfRangeThrows(): void
+    public function testSampleRateOfOneDoesNotAppendRateToken(): void
     {
-        $this->expectException(ConfigurationException::class);
-        $this->metrics->increment('x', 1, [], 1.5);
+        $this->metrics->increment('hit', 1, [], 1.0);
+
+        $this->assertSame(['hit:1|c'], $this->sink->packets);
+    }
+
+    public function testSampleRateAboveOneClampsToAlwaysEmit(): void
+    {
+        // Out-of-range sampleRate must not throw on the hot path; >=1 always
+        // emits and (per format()) does not append a rate token.
+        $this->metrics->increment('hit', 1, [], 1.5);
+
+        $this->assertSame(['hit:1|c'], $this->sink->packets);
+    }
+
+    public function testSampleRateOfZeroDropsEmission(): void
+    {
+        $this->metrics->increment('hit', 1, [], 0.0);
+        $this->metrics->increment('hit', 1, [], -1.0);
+
+        $this->assertSame([], $this->sink->packets);
     }
 
     public function testEmptyMetricNameRejected(): void
@@ -122,6 +135,52 @@ final class MetricsTest extends TestCase
     {
         $this->expectException(ConfigurationException::class);
         $this->metrics->increment('ok', 1, ['bad,key' => 'v']);
+    }
+
+    public function testIllegalCharsInTagValueRejected(): void
+    {
+        $this->expectException(ConfigurationException::class);
+        $this->metrics->increment('ok', 1, ['k' => 'bad,val']);
+    }
+
+    public function testIllegalCharsInDefaultTagsRejectedAtConstruction(): void
+    {
+        $this->expectException(ConfigurationException::class);
+        new Metrics($this->sink, ['bad key' => 'v']);
+    }
+
+    public function testCountEmitsCounterWithValue(): void
+    {
+        $this->metrics->count('orders.total', 42);
+
+        $this->assertSame(['orders.total:42|c'], $this->sink->packets);
+    }
+
+    public function testEmptyTagValueRendersAsBareKey(): void
+    {
+        $this->metrics->increment('hit', 1, ['flag' => '']);
+
+        $this->assertSame(['hit:1|c|#flag'], $this->sink->packets);
+    }
+
+    public function testNumericTagValuesAreCoercedToString(): void
+    {
+        $this->metrics->increment('hit', 1, ['n' => 7, 'f' => 1.5]);
+
+        $this->assertSame(['hit:1|c|#n:7,f:1.5'], $this->sink->packets);
+    }
+
+    public function testNegativeFloatValueRetainsSign(): void
+    {
+        $this->metrics->gauge('temp', -2.5);
+
+        $this->assertSame(['temp:-2.5|g'], $this->sink->packets);
+    }
+
+    public function testInfiniteValueRejected(): void
+    {
+        $this->expectException(ConfigurationException::class);
+        $this->metrics->gauge('x', INF);
     }
 
     public function testTimeBlockEmitsTimingAndReturnsValue(): void

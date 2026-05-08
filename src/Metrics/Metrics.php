@@ -28,6 +28,13 @@ use Mesh0\Exception\ConfigurationException;
  * | `h`  | histogram          |
  * | `d`  | distribution       |
  *
+ * Validation: malformed metric names or tags throw `ConfigurationException`
+ * — these are programmer errors that should fail loudly in development. The
+ * underlying {@see MetricSink} is fire-and-forget for *transport* failures;
+ * format errors surface as exceptions because silently dropping them would
+ * make missing telemetry untraceable. `sampleRate` outside `(0, 1]` is
+ * clamped (>=1 always emits, <=0 never emits) rather than throwing.
+ *
  * @example
  *   $metrics = $client->metrics();
  *   $metrics->increment('checkout.charge', tags: ['tier' => 'pro']);
@@ -164,8 +171,8 @@ final class Metrics
      */
     private function emit(string $name, int|float $value, string $type, array $tags, float $sampleRate): void
     {
-        if ($sampleRate <= 0.0 || $sampleRate > 1.0) {
-            throw new ConfigurationException('sampleRate must be in (0, 1]');
+        if ($sampleRate <= 0.0) {
+            return;
         }
         if ($sampleRate < 1.0 && (mt_rand() / mt_getrandmax()) > $sampleRate) {
             return;
