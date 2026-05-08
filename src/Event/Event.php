@@ -13,29 +13,6 @@ use DateTimeInterface;
  * Construct directly when you have all the data, or use {@see EventBuilder}
  * for a fluent API. `timestamp` is required; everything else maps to optional
  * fields on the server-side schema.
- *
- * @phpstan-type EventArray array{
- *   timestamp: string|int|float,
- *   event_id?: string,
- *   duration_ms?: int|float,
- *   trace_id?: string,
- *   span_id?: string,
- *   parent_span_id?: string,
- *   app_id?: string,
- *   environment?: string,
- *   operation?: string,
- *   status?: string,
- *   error_type?: string,
- *   error_message?: string,
- *   model?: array<string, string>,
- *   usage?: array<string, int|float>,
- *   finish_reason?: string,
- *   user_id?: string,
- *   session_id?: string,
- *   tools?: list<string>,
- *   attributes?: array<string, mixed>,
- *   messages?: mixed,
- * }
  */
 final readonly class Event
 {
@@ -80,12 +57,11 @@ final readonly class Event
     /**
      * Serialize to the wire format `/v1/events` accepts.
      *
-     * @return EventArray
+     * @return array<string, mixed>
      */
     public function toArray(): array
     {
         // Server accepts ISO-8601 strings; format with millisecond precision UTC.
-        /** @var EventArray $out */
         $out = [
             'timestamp' => $this->timestamp->format('Y-m-d\\TH:i:s.v\\Z'),
         ];

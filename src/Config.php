@@ -25,13 +25,13 @@ final class Config
     public readonly array $defaultHeaders;
 
     /**
-     * @param non-empty-string                $apiKey         API key in the form `m0_<routing>_<secret>`.
-     * @param non-empty-string                $baseUrl        API base URL, no trailing slash.
-     * @param float                           $timeout        Total request timeout, seconds.
-     * @param float                           $connectTimeout Connect timeout, seconds.
-     * @param int<0, max>                     $maxRetries     Retries for idempotent failures (network / 5xx / 429).
-     * @param non-empty-string                $userAgent      User-Agent header value.
-     * @param array<string, string>           $defaultHeaders Extra headers added to every request.
+     * @param string                $apiKey         API key in the form `m0_<routing>_<secret>`.
+     * @param string                $baseUrl        API base URL, no trailing slash.
+     * @param float                 $timeout        Total request timeout, seconds.
+     * @param float                 $connectTimeout Connect timeout, seconds.
+     * @param int                   $maxRetries     Retries for idempotent failures (network / 5xx / 429).
+     * @param string                $userAgent      User-Agent header value.
+     * @param array<string, string> $defaultHeaders Extra headers added to every request.
      */
     public function __construct(
         public readonly string $apiKey,

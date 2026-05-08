@@ -70,7 +70,7 @@ final class Events
     /**
      * List events newest-first, with cursor pagination.
      *
-     * @param int<1, 500>          $limit
+     * @param int $limit Page size (1-500, server-enforced).
      * @return array{events: list<array<string, mixed>>, nextCursor: ?string, hasMore: bool}
      */
     public function list(int $limit = 50, ?string $cursor = null): array

@@ -37,9 +37,10 @@ final class EventsResourceTest extends TestCase
         $result = $this->events->send(Event::now()->withOperation('test')->build());
 
         $this->assertSame(1, $result);
-        $payload = json_decode((string) $this->mock->lastRequest()->getBody(), true);
-        $this->assertIsArray($payload);
-        $this->assertCount(1, $payload['events']);
+        $payload = $this->mock->lastJsonBody();
+        $events = $payload['events'] ?? null;
+        $this->assertIsArray($events);
+        $this->assertCount(1, $events);
     }
 
     public function testListReturnsCursorAndEvents(): void

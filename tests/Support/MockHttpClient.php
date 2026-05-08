@@ -21,6 +21,10 @@ final class MockHttpClient implements ClientInterface
     /** @var list<ResponseInterface|\Throwable> */
     private array $queue = [];
 
+    /**
+     * @param array<string, mixed> $body
+     * @param array<string, string> $headers
+     */
     public function queueJson(int $status, array $body, array $headers = []): void
     {
         $this->queue[] = new Response(
@@ -55,10 +59,44 @@ final class MockHttpClient implements ClientInterface
 
     public function lastRequest(): RequestInterface
     {
-        $count = count($this->requests);
+        $count = \count($this->requests);
         if ($count === 0) {
             throw new \RuntimeException('No requests recorded');
         }
         return $this->requests[$count - 1];
+    }
+
+    /**
+     * Decode the last request's JSON body and assert the top level is an object.
+     *
+     * @return array<string, mixed>
+     */
+    public function lastJsonBody(): array
+    {
+        $raw = (string) $this->lastRequest()->getBody();
+        /** @var mixed $decoded */
+        $decoded = json_decode($raw, true, flags: JSON_THROW_ON_ERROR);
+        if (!\is_array($decoded)) {
+            throw new \RuntimeException('Last request body was not a JSON object');
+        }
+        /** @var array<string, mixed> $decoded */
+        return $decoded;
+    }
+
+    /**
+     * Pull a single event out of the last `/v1/events` request body.
+     *
+     * @return array<string, mixed>
+     */
+    public function lastEvent(int $index = 0): array
+    {
+        $body = $this->lastJsonBody();
+        $events = $body['events'] ?? null;
+        if (!\is_array($events) || !isset($events[$index]) || !\is_array($events[$index])) {
+            throw new \RuntimeException("No event at index {$index}");
+        }
+        /** @var array<string, mixed> $event */
+        $event = $events[$index];
+        return $event;
     }
 }

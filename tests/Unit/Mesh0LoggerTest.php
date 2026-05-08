@@ -46,15 +46,15 @@ final class Mesh0LoggerTest extends TestCase
         $logger->flush();
 
         $this->assertCount(1, $this->mock->requests);
-        $body = json_decode((string) $this->mock->lastRequest()->getBody(), true);
-        $this->assertIsArray($body);
-        $event = $body['events'][0];
+        $event = $this->mock->lastEvent();
         $this->assertSame('log.info', $event['operation']);
         $this->assertSame('web', $event['app_id']);
         $this->assertSame('success', $event['status']);
-        $this->assertSame('user alice signed up', $event['attributes']['message']);
-        $this->assertSame('pro', $event['attributes']['plan']);
-        $this->assertSame(LogLevel::INFO, $event['attributes']['log.level']);
+        $attributes = $event['attributes'];
+        $this->assertIsArray($attributes);
+        $this->assertSame('user alice signed up', $attributes['message']);
+        $this->assertSame('pro', $attributes['plan']);
+        $this->assertSame(LogLevel::INFO, $attributes['log.level']);
     }
 
     public function testErrorWithExceptionMapsErrorFields(): void
@@ -64,13 +64,13 @@ final class Mesh0LoggerTest extends TestCase
         $this->mock->queueJson(200, ['accepted' => 1]);
         $logger->error('charge failed', ['exception' => new \RuntimeException('boom'), 'order_id' => 'ord_1']);
 
-        $body = json_decode((string) $this->mock->lastRequest()->getBody(), true);
-        $this->assertIsArray($body);
-        $event = $body['events'][0];
+        $event = $this->mock->lastEvent();
         $this->assertSame('error', $event['status']);
         $this->assertSame('RuntimeException', $event['error_type']);
         $this->assertSame('boom', $event['error_message']);
-        $this->assertSame('ord_1', $event['attributes']['order_id']);
+        $attributes = $event['attributes'];
+        $this->assertIsArray($attributes);
+        $this->assertSame('ord_1', $attributes['order_id']);
     }
 
     public function testTraceContextIsLifted(): void
@@ -88,7 +88,7 @@ final class Mesh0LoggerTest extends TestCase
             'duration_ms' => 12.5,
         ]);
 
-        $event = json_decode((string) $this->mock->lastRequest()->getBody(), true)['events'][0];
+        $event = $this->mock->lastEvent();
         $this->assertSame('tr-1', $event['trace_id']);
         $this->assertSame('sp-1', $event['span_id']);
         $this->assertSame('sp-0', $event['parent_span_id']);
@@ -97,7 +97,9 @@ final class Mesh0LoggerTest extends TestCase
         $this->assertSame('http.request', $event['operation']);
         $this->assertSame(12.5, $event['duration_ms']);
         // The reserved keys should not also leak into attributes.
-        $this->assertArrayNotHasKey('trace_id', $event['attributes']);
+        $attributes = $event['attributes'];
+        $this->assertIsArray($attributes);
+        $this->assertArrayNotHasKey('trace_id', $attributes);
     }
 
     public function testMinimumLevelFiltersLowerSeverities(): void
