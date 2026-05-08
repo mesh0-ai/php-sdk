@@ -1,0 +1,74 @@
+{
+    "name": "mesh0/sdk",
+    "description": "Official PHP SDK for the mesh0 AI telemetry platform — send logs, traces, and events; query with TQL.",
+    "type": "library",
+    "license": "MIT",
+    "homepage": "https://mesh0.ai",
+    "keywords": [
+        "mesh0",
+        "telemetry",
+        "observability",
+        "logging",
+        "logger",
+        "psr-3",
+        "ai",
+        "llm",
+        "otlp",
+        "tracing"
+    ],
+    "support": {
+        "issues": "https://github.com/mesh0-ai/php-sdk/issues",
+        "source": "https://github.com/mesh0-ai/php-sdk",
+        "docs": "https://mesh0.ai/docs"
+    },
+    "require": {
+        "php": "^8.2",
+        "ext-json": "*",
+        "psr/log": "^2.0 || ^3.0",
+        "psr/http-client": "^1.0",
+        "psr/http-factory": "^1.0",
+        "psr/http-message": "^1.1 || ^2.0",
+        "php-http/discovery": "^1.19"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^10.5 || ^11.0",
+        "phpstan/phpstan": "^1.11",
+        "phpstan/phpstan-strict-rules": "^1.6",
+        "friendsofphp/php-cs-fixer": "^3.59",
+        "guzzlehttp/guzzle": "^7.8",
+        "guzzlehttp/psr7": "^2.6"
+    },
+    "suggest": {
+        "guzzlehttp/guzzle": "Recommended PSR-18 HTTP client; auto-discovered when installed.",
+        "symfony/http-client": "Alternative PSR-18 HTTP client; also auto-discovered."
+    },
+    "autoload": {
+        "psr-4": {
+            "Mesh0\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Mesh0\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "phpunit",
+        "stan": "phpstan analyse --memory-limit=512M",
+        "cs": "php-cs-fixer fix --dry-run --diff",
+        "cs-fix": "php-cs-fixer fix",
+        "ci": [
+            "@cs",
+            "@stan",
+            "@test"
+        ]
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "php-http/discovery": true
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
