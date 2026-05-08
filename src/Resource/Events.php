@@ -4,9 +4,12 @@ declare(strict_types=1);
 
 namespace Mesh0\Resource;
 
+use Mesh0\Config;
 use Mesh0\Event\Event;
 use Mesh0\Event\EventBuilder;
+use Mesh0\Event\UdpEventSink;
 use Mesh0\Http\Transport;
+use Psr\Log\LoggerInterface;
 
 /**
  * `/v1/events` resource — ingest custom events and read them back.
@@ -19,8 +22,44 @@ final class Events
     /** Server-side hard cap (mirrors backend validation). */
     private const MAX_BATCH = 5000;
 
-    public function __construct(private readonly Transport $http)
+    private ?UdpEventSink $udpSink = null;
+
+    public function __construct(
+        private readonly Transport $http,
+        private readonly ?Config $config = null,
+    ) {
+    }
+
+    /**
+     * Return a UDP event sink targeting a co-located mesh0 metrics-agent.
+     *
+     * The agent listens on UDP (default `127.0.0.1:8125`) and forwards events
+     * to mesh0's `/v1/events` endpoint over HTTPS. Per-call cost is ~5µs,
+     * making this suitable for short-lived processes (PHP request handlers,
+     * CLI workers) that can't afford an HTTPS roundtrip per event.
+     *
+     * Subsequent calls without arguments return the same instance. The UDP
+     * path is at-most-once; for at-least-once durability use {@see send()} /
+     * {@see sendMany()} which POST to `/v1/events` directly.
+     *
+     * Defaults read from {@see Config::$metricsAgentHost} /
+     * {@see Config::$metricsAgentPort} (the agent listens on the same port
+     * for both metrics and events).
+     */
+    public function udp(?string $host = null, ?int $port = null, ?LoggerInterface $logger = null): UdpEventSink
     {
+        $defaultHost = $this->config?->metricsAgentHost ?? UdpEventSink::DEFAULT_HOST;
+        $defaultPort = $this->config?->metricsAgentPort ?? UdpEventSink::DEFAULT_PORT;
+
+        if ($host !== null || $port !== null || $logger !== null) {
+            return new UdpEventSink(
+                $host ?? $defaultHost,
+                $port ?? $defaultPort,
+                $logger,
+            );
+        }
+
+        return $this->udpSink ??= new UdpEventSink($defaultHost, $defaultPort);
     }
 
     /**

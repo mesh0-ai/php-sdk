@@ -52,7 +52,7 @@ final class Client
         ?StreamFactoryInterface $streamFactory = null,
     ) {
         $this->transport = new Transport($config, $http, $requestFactory, $streamFactory);
-        $this->events = new Events($this->transport);
+        $this->events = new Events($this->transport, $config);
         $this->traces = new Traces($this->transport);
         $this->query = new Query($this->transport);
         $this->meta = new Meta($this->transport);
