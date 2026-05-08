@@ -205,6 +205,36 @@ emits) rather than throwing.
 
 ---
 
+## Sending events over UDP (low-latency)
+
+For short-lived processes (PHP request handlers, CLI workers) that can't
+afford an HTTPS roundtrip per event, fire events at the same metrics-agent
+sidecar as JSON datagrams (~5µs per call):
+
+```php
+$udp = $mesh0->events->udp(); // UDP 127.0.0.1:8125 by default
+
+$udp->send(
+    Mesh0\Event\Event::now()
+        ->withApp('checkout', 'prod')
+        ->withOperation('charge.succeeded')
+        ->withAttribute('order_id', 'ord_123'),
+);
+
+// Bulk loop — the agent batches before forwarding to mesh0.
+$udp->sendMany([$e1, $e2, $e3]);
+```
+
+The socket is opened lazily on the first send. Datagrams larger than 32KB
+are dropped with a single warning (pass a PSR-3 logger to observe), and
+transport errors are swallowed — `send()` never throws.
+
+This path is **at-most-once**: if the local agent is down or the kernel
+drops the datagram, the event is gone. For at-least-once durability, use
+`$mesh0->events->send(...)` which POSTs to `/v1/events` directly.
+
+---
+
 ## Querying
 
 ```php
