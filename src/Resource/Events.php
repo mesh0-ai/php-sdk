@@ -31,20 +31,24 @@ final class Events
     }
 
     /**
-     * Return a UDP event sink targeting a co-located mesh0 metrics-agent.
+     * Return a datagram event sink targeting a co-located mesh0 metrics-agent.
      *
-     * The agent listens on UDP (default `127.0.0.1:8125`) and forwards events
-     * to mesh0's `/v1/events` endpoint over HTTPS. Per-call cost is ~5µs,
-     * making this suitable for short-lived processes (PHP request handlers,
-     * CLI workers) that can't afford an HTTPS roundtrip per event.
+     * The agent listens on UDP (default `127.0.0.1:8125`) — or on a Unix
+     * datagram socket when `socketPath` (or {@see Config::$metricsAgentSocketPath})
+     * is set — and forwards events to mesh0's `/v1/events` endpoint over
+     * HTTPS. Per-call cost is ~5µs, making this suitable for short-lived
+     * processes (PHP request handlers, CLI workers) that can't afford an
+     * HTTPS roundtrip per event.
      *
-     * Subsequent calls without arguments return the same instance. The UDP
-     * path is at-most-once; for at-least-once durability use {@see send()} /
-     * {@see sendMany()} which POST to `/v1/events` directly.
+     * Subsequent calls without arguments return the same instance. The
+     * datagram path is at-most-once; for at-least-once durability use
+     * {@see send()} / {@see sendMany()} which POST to `/v1/events` directly.
      *
-     * Defaults read from {@see Config::$metricsAgentHost} /
-     * {@see Config::$metricsAgentPort} (the agent listens on the same port
-     * for both metrics and events).
+     * Defaults read from {@see Config::$metricsAgentSocketPath} when set
+     * (UDS-DGRAM), otherwise {@see Config::$metricsAgentHost} /
+     * {@see Config::$metricsAgentPort} (UDP, agent listens on the same port
+     * for both metrics and events). When `socketPath` is set, `host` and
+     * `port` are ignored.
      */
     public function udp(
         ?string $host = null,

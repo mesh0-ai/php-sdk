@@ -27,10 +27,8 @@ use Psr\Log\NullLogger;
  * performs zero I/O. Send errors are intentionally swallowed (datagrams are
  * at-most-once); an optional PSR-3 logger receives a single `warning` per
  * state transition (open failure / write failure / oversize drop) so missing
- * telemetry is at least observable.
- *
- * The class name is preserved for backward compatibility — UDS-DGRAM is just
- * a different concrete transport for the same "local agent sink" role.
+ * telemetry is at least observable. See `UdpMetricSink` for the rationale
+ * behind keeping the `Udp` class name across both transports.
  */
 final class UdpEventSink implements EventSink
 {
@@ -40,8 +38,10 @@ final class UdpEventSink implements EventSink
     /**
      * Maximum size of a single datagram. Anything larger risks IP
      * fragmentation (UDP) or being silently dropped by the kernel; we drop
-     * with a single warning rather than crash the request path. The agent
-     * enforces the same 32 KB ceiling server-side regardless of transport.
+     * with a single warning rather than crash the request path. Matches
+     * the agent's documented per-datagram limit at the time of writing
+     * (metrics-agent >= 0.3.0); the agent will reject larger payloads
+     * regardless.
      */
     public const MAX_DATAGRAM_BYTES = 32_768;
 

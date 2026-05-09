@@ -86,6 +86,13 @@ final class Config
                 // fragile across deployments.
                 throw new ConfigurationException('metricsAgentSocketPath must be an absolute filesystem path');
             }
+            // sun_path is 104 bytes on macOS/BSD and 108 on Linux. Reject at
+            // the smaller bound so the same config works across platforms;
+            // longer paths fail at stream_socket_client() with an opaque
+            // EINVAL and the open-failure latch then disables the sink.
+            if (\strlen($metricsAgentSocketPath) > 104) {
+                throw new ConfigurationException('metricsAgentSocketPath exceeds 104 bytes (sun_path limit)');
+            }
         }
 
         $this->defaultHeaders = $defaultHeaders;

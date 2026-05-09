@@ -124,6 +124,16 @@ final class ConfigTest extends TestCase
         $this->assertSame('/run/mesh0/agent.sock', $c->metricsAgentSocketPath);
     }
 
+    public function testRejectsTooLongMetricsAgentSocketPath(): void
+    {
+        $this->expectException(ConfigurationException::class);
+        $this->expectExceptionMessageMatches('/sun_path/');
+        new Config(
+            apiKey: 'm0_abcde_aaaaaaaaaaaaaaaaaaaaaaaa',
+            metricsAgentSocketPath: '/' . str_repeat('a', 104),
+        );
+    }
+
     public function testFromEnvReadsAgentSocket(): void
     {
         \putenv('MESH0_API_KEY=m0_abcde_aaaaaaaaaaaaaaaaaaaaaaaa');

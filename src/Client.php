@@ -99,17 +99,22 @@ final class Client
     /**
      * Return a metrics client targeting a co-located mesh0 metrics-agent.
      *
-     * The agent listens on UDP (default `127.0.0.1:8125`) and forwards
-     * counters, gauges, and timings to mesh0 over HTTPS. The UDP socket is
-     * opened lazily on the first `send()` so calling this method does no I/O.
+     * The agent listens on UDP (default `127.0.0.1:8125`) — or on a Unix
+     * datagram socket when `socketPath` (or {@see Config::$metricsAgentSocketPath})
+     * is set — and forwards counters, gauges, and timings to mesh0 over
+     * HTTPS. The socket is opened lazily on the first `send()` so calling
+     * this method does no I/O.
      *
-     * Subsequent calls without arguments return the same instance. Pass `host`
-     * or `port` to build a fresh `Metrics` against a different agent (or pass
-     * a custom `MetricSink` to bypass UDP entirely, e.g. in tests).
+     * Subsequent calls without arguments return the same instance. Pass
+     * `host`/`port`/`socketPath` to build a fresh `Metrics` against a
+     * different agent (or pass a custom `MetricSink` to bypass the
+     * datagram transport entirely, e.g. in tests). When `socketPath` is
+     * set, `host` and `port` are ignored.
      *
-     * Defaults read from `Config::metricsAgentHost` / `metricsAgentPort` (which
-     * in turn pick up `MESH0_AGENT_HOST` / `MESH0_AGENT_PORT` via
-     * `Config::fromEnv()`).
+     * Defaults read from `Config::metricsAgentSocketPath` when set,
+     * otherwise `metricsAgentHost`/`metricsAgentPort` (which in turn pick
+     * up `MESH0_AGENT_SOCKET` / `MESH0_AGENT_HOST` / `MESH0_AGENT_PORT`
+     * via `Config::fromEnv()`).
      *
      * @param array<string, string|int|float> $defaultTags Tags merged into every metric.
      */
@@ -122,18 +127,16 @@ final class Client
     ): Metrics {
         if ($sink !== null || $host !== null || $port !== null || $defaultTags !== [] || $socketPath !== null) {
             $effectiveSink = $sink ?? new UdpMetricSink(
-                $host ?? $this->config->metricsAgentHost,
-                $port ?? $this->config->metricsAgentPort,
-                null,
-                $socketPath ?? $this->config->metricsAgentSocketPath,
+                host: $host ?? $this->config->metricsAgentHost,
+                port: $port ?? $this->config->metricsAgentPort,
+                socketPath: $socketPath ?? $this->config->metricsAgentSocketPath,
             );
             return new Metrics($effectiveSink, $defaultTags);
         }
         return $this->metrics ??= new Metrics(new UdpMetricSink(
-            $this->config->metricsAgentHost,
-            $this->config->metricsAgentPort,
-            null,
-            $this->config->metricsAgentSocketPath,
+            host: $this->config->metricsAgentHost,
+            port: $this->config->metricsAgentPort,
+            socketPath: $this->config->metricsAgentSocketPath,
         ));
     }
 
