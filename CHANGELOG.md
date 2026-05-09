@@ -4,6 +4,113 @@ All notable changes to `mesh0/sdk` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2.0.0 - 2026-05-09
+
+The `/v1/events` wire contract is now intentionally narrow: identity,
+time, status, plus two open bins (`attributes` queryable, `data`
+opaque). The backend runs `DisallowUnknownFields`, so the 1.x
+top-level fields all had to fold into `attributes` / `data` or
+disappear. This is a major break — no backwards-compat shims.
+
+### Removed
+- Top-level `Event` fields: `appId`, `environment`, `operation`,
+  `model`, `usage`, `userId`, `sessionId`, `tools`, `messages`,
+  `errorType`, `errorMessage`, `finishReason`.
+- `Mesh0\Event\Model` and `Mesh0\Event\Usage` value objects (no
+  longer first-class — fold their data into `attributes`).
+- Corresponding `EventBuilder` methods: `withApp()`, `withModel()`,
+  `withUsage()`, `withUser()`, `withSession()`, `withTools()`,
+  `withMessages()`, `withFinishReason()`, `withError()`.
+- `appId` and `environment` constructor parameters on
+  `Mesh0\Logger\Mesh0Logger` and `Mesh0\Trace\Tracer`.
+
+### Added
+- `EventBuilder::withData(array)` — write to the opaque `data` bin
+  (large payloads, LLM message arrays, raw req/resp).
+- `EventBuilder::withAttributes(array)` and `withAttribute(key, value)`
+  — merge semantics, repeated calls accumulate.
+- `Mesh0\Event\Status` enum (`success` / `error`) replaces the
+  freeform string status.
+- `Mesh0Logger` constructor accepts an optional `?LoggerInterface
+  $fallback` for diagnostics about swallowed delivery errors and
+  malformed caller input. Defaults to `NullLogger` so misconfigured
+  callers stay silent unless they opt in. `Client::logger()` exposes
+  the same parameter.
+
+### Changed
+- `Mesh0Logger` now throws `Psr\Log\InvalidArgumentException` on
+  unknown PSR-3 levels (per the spec), rather than silently
+  coercing to `INFO`.
+- `Mesh0Logger` no longer stamps `status=success` on info / debug /
+  notice / warning records — only error records carry a status. Keeps
+  `status=success` dashboards from being polluted by routine logs.
+- `Mesh0Logger` flush / shutdown / destruct paths now route swallowed
+  throwables to the fallback logger so delivery failures are visible.
+  Malformed reserved context values (`trace_id` not a string,
+  `duration_ms` not numeric, `exception` not a `Throwable`,
+  `parent_span_id` without `span_id`) emit a fallback warning instead
+  of being silently dropped.
+- `Mesh0Logger::interpolate()` renders non-stringable placeholder
+  values as `<non-stringable type>` instead of leaving the literal
+  `{key}` text in the rendered message.
+- `EventBuilder::withTraceId()`, `withSpan()`, `withEventId()` reject
+  empty strings; `withDurationMs()` rejects negative or non-finite
+  values. Throws `InvalidArgumentException` early instead of letting
+  malformed identities reach the wire.
+- `Event::toArray()` re-zones the timestamp to UTC before formatting.
+  A non-UTC `DateTimeImmutable` no longer ships a wrong instant with
+  a stray `Z` suffix.
+- `Tracer::span()`, `Tracer::finish()` wrap sink writes and exit
+  paths in try/catch so a sink failure cannot unwind out and corrupt
+  the parent stack — the loss is logged through the configured PSR-3
+  logger instead.
+- `Mesh0\Trace\Tracer` reserved context-key partitioning in
+  `Mesh0Logger`: `event_id`, `trace_id`, `span_id`, `parent_span_id`,
+  `duration_ms`, and `exception` are lifted to wire fields and never
+  leak back into `attributes`.
+
+### Migration
+
+```diff
+- Event::now()
+-     ->withApp('checkout', 'prod')
+-     ->withUser('user_42')
+-     ->withModel(new Model('anthropic', 'claude-opus-4-7'))
+-     ->withUsage(new Usage(promptTokens: 1240, completionTokens: 380))
+-     ->withMessages($messages)
++ Event::now()
++     ->withAttributes([
++         'app.id'                     => 'checkout',
++         'app.environment'            => 'prod',
++         'user.id'                    => 'user_42',
++         'gen_ai.system'              => 'anthropic',
++         'gen_ai.request.model'       => 'claude-opus-4-7',
++         'gen_ai.usage.input_tokens'  => 1240,
++         'gen_ai.usage.output_tokens' => 380,
++     ])
++     ->withData(['messages' => $messages]);
+```
+
+```diff
+- $logger = $mesh0->logger(appId: 'web', environment: 'prod');
++ $logger = $mesh0->logger(defaults: [
++     'app.id'          => 'web',
++     'app.environment' => 'prod',
++ ]);
+```
+
+```diff
+- $tracer = $mesh0->tracer(appId: 'agents', environment: 'prod');
++ $tracer = $mesh0->tracer();
++ // Stamp app.id / app.environment via attributes on each span:
++ $tracer->span('agent.run', [
++     'app.id'          => 'agents',
++     'app.environment' => 'prod',
++ ], $fn);
+```
+
+Pair with backend `>= 2.0.0` (the narrowed `EventRow` schema).
+
 ## 1.0.0 - 2026-05-08
 
 UDS-DGRAM is now the only transport for the local metrics-agent. UDP

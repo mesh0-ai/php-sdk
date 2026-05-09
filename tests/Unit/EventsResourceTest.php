@@ -34,7 +34,7 @@ final class EventsResourceTest extends TestCase
     {
         $this->mock->queueJson(200, ['accepted' => 1]);
 
-        $result = $this->events->send(Event::now()->withOperation('test')->build());
+        $result = $this->events->send(Event::now()->withAttribute('span.name', 'test')->build());
 
         $this->assertSame(1, $result);
         $payload = $this->mock->lastJsonBody();

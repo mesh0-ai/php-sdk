@@ -5,20 +5,30 @@ declare(strict_types=1);
 namespace Mesh0\Event;
 
 use DateTimeInterface;
+use InvalidArgumentException;
 
 /**
  * Fluent builder for {@see Event}.
  *
- * Each `with*` method returns a new builder, so the builder is safe to share
- * and reuse — no hidden mutation. Call {@see build()} to materialize the
- * immutable {@see Event}, or pass the builder directly to a sender (the
- * sender will call `build()` internally).
+ * Each `with*` method returns a new builder, so the builder is safe to
+ * share and reuse — no hidden mutation. Surface mirrors the wire shape:
+ * identity (event/trace/span ids), time/duration, status, plus the two
+ * open bins (`attributes`, `data`). Anything outside this surface
+ * (model/usage tags, user identity, environment, operation name, error
+ * metadata, etc.) belongs in `attributes` (queryable) or `data`
+ * (opaque). Pick keys that match your project's TQL aliases / promoted
+ * fields.
+ *
+ * The builder is set-only: `with*` methods accept non-null values and
+ * accumulate state. There is currently no way to clear a previously-set
+ * field — start from a fresh `Event::now()`/`Event::at()` if you need
+ * to reset.
  */
 final readonly class EventBuilder
 {
     /**
-     * @param list<string>|null         $tools
      * @param array<string, mixed>|null $attributes
+     * @param array<string, mixed>|null $data
      */
     public function __construct(
         private DateTimeInterface $timestamp,
@@ -27,105 +37,47 @@ final readonly class EventBuilder
         private ?string $traceId = null,
         private ?string $spanId = null,
         private ?string $parentSpanId = null,
-        private ?string $appId = null,
-        private ?string $environment = null,
-        private ?string $operation = null,
         private ?Status $status = null,
-        private ?string $errorType = null,
-        private ?string $errorMessage = null,
-        private ?Model $model = null,
-        private ?Usage $usage = null,
-        private ?string $finishReason = null,
-        private ?string $userId = null,
-        private ?string $sessionId = null,
-        private ?array $tools = null,
         private ?array $attributes = null,
-        private mixed $messages = null,
+        private ?array $data = null,
     ) {
     }
 
     public function withEventId(string $id): self
     {
+        self::requireNonEmpty('event_id', $id);
         return $this->copy(eventId: $id);
     }
 
     public function withDurationMs(float $durationMs): self
     {
+        if ($durationMs < 0.0 || !is_finite($durationMs)) {
+            throw new InvalidArgumentException(sprintf(
+                'duration_ms must be a finite, non-negative number; got %s',
+                var_export($durationMs, true),
+            ));
+        }
         return $this->copy(durationMs: $durationMs);
     }
 
     public function withTraceId(string $traceId): self
     {
+        self::requireNonEmpty('trace_id', $traceId);
         return $this->copy(traceId: $traceId);
     }
 
     public function withSpan(string $spanId, ?string $parentSpanId = null): self
     {
+        self::requireNonEmpty('span_id', $spanId);
+        if ($parentSpanId !== null) {
+            self::requireNonEmpty('parent_span_id', $parentSpanId);
+        }
         return $this->copy(spanId: $spanId, parentSpanId: $parentSpanId);
-    }
-
-    public function withApp(string $appId, ?string $environment = null): self
-    {
-        return $this->copy(appId: $appId, environment: $environment);
-    }
-
-    public function withOperation(string $operation): self
-    {
-        return $this->copy(operation: $operation);
     }
 
     public function withStatus(Status $status): self
     {
         return $this->copy(status: $status);
-    }
-
-    public function withError(string $type, string $message): self
-    {
-        return $this->copy(status: Status::Error, errorType: $type, errorMessage: $message);
-    }
-
-    public function withModel(string $provider, string $id): self
-    {
-        return $this->copy(model: new Model($provider, $id));
-    }
-
-    public function withUsage(
-        ?int $promptTokens = null,
-        ?int $completionTokens = null,
-        ?int $totalTokens = null,
-        ?float $costUsd = null,
-    ): self {
-        return $this->copy(usage: new Usage($promptTokens, $completionTokens, $totalTokens, $costUsd));
-    }
-
-    public function withFinishReason(string $reason): self
-    {
-        return $this->copy(finishReason: $reason);
-    }
-
-    /**
-     * Tag the event with your application's end-user id.
-     *
-     * This is *not* the mesh0 platform user that minted the API key — the
-     * key already identifies your project. `user_id` is the user inside
-     * your product (analogous to OpenAI's `user` param), used for
-     * attribution and filtering in the dashboard / TQL.
-     */
-    public function withUser(string $userId): self
-    {
-        return $this->copy(userId: $userId);
-    }
-
-    /** Tag the event with an application session id (your product's session, not mesh0's). */
-    public function withSession(string $sessionId): self
-    {
-        return $this->copy(sessionId: $sessionId);
-    }
-
-    /** @param list<string> $tools */
-    public function withTools(array $tools): self
-    {
-        return $this->copy(tools: $tools);
     }
 
     /** @param array<string, mixed> $attributes */
@@ -140,9 +92,10 @@ final readonly class EventBuilder
         return $this->withAttributes([$key => $value]);
     }
 
-    public function withMessages(mixed $messages): self
+    /** @param array<string, mixed> $data */
+    public function withData(array $data): self
     {
-        return $this->copy(messages: $messages);
+        return $this->copy(data: $data);
     }
 
     public function build(): Event
@@ -154,26 +107,26 @@ final readonly class EventBuilder
             traceId: $this->traceId,
             spanId: $this->spanId,
             parentSpanId: $this->parentSpanId,
-            appId: $this->appId,
-            environment: $this->environment,
-            operation: $this->operation,
             status: $this->status,
-            errorType: $this->errorType,
-            errorMessage: $this->errorMessage,
-            model: $this->model,
-            usage: $this->usage,
-            finishReason: $this->finishReason,
-            userId: $this->userId,
-            sessionId: $this->sessionId,
-            tools: $this->tools,
             attributes: $this->attributes,
-            messages: $this->messages,
+            data: $this->data,
         );
     }
 
+    private static function requireNonEmpty(string $field, string $value): void
+    {
+        if ($value === '') {
+            throw new InvalidArgumentException("{$field} must be a non-empty string");
+        }
+    }
+
     /**
-     * @param list<string>|null         $tools
+     * Copy-on-write helper. Note: `null` arguments mean "leave unchanged",
+     * not "clear this field" — see the class-level note about the builder
+     * being set-only.
+     *
      * @param array<string, mixed>|null $attributes
+     * @param array<string, mixed>|null $data
      */
     private function copy(
         ?DateTimeInterface $timestamp = null,
@@ -182,20 +135,9 @@ final readonly class EventBuilder
         ?string $traceId = null,
         ?string $spanId = null,
         ?string $parentSpanId = null,
-        ?string $appId = null,
-        ?string $environment = null,
-        ?string $operation = null,
         ?Status $status = null,
-        ?string $errorType = null,
-        ?string $errorMessage = null,
-        ?Model $model = null,
-        ?Usage $usage = null,
-        ?string $finishReason = null,
-        ?string $userId = null,
-        ?string $sessionId = null,
-        ?array $tools = null,
         ?array $attributes = null,
-        mixed $messages = null,
+        ?array $data = null,
     ): self {
         return new self(
             timestamp: $timestamp ?? $this->timestamp,
@@ -204,20 +146,9 @@ final readonly class EventBuilder
             traceId: $traceId ?? $this->traceId,
             spanId: $spanId ?? $this->spanId,
             parentSpanId: $parentSpanId ?? $this->parentSpanId,
-            appId: $appId ?? $this->appId,
-            environment: $environment ?? $this->environment,
-            operation: $operation ?? $this->operation,
             status: $status ?? $this->status,
-            errorType: $errorType ?? $this->errorType,
-            errorMessage: $errorMessage ?? $this->errorMessage,
-            model: $model ?? $this->model,
-            usage: $usage ?? $this->usage,
-            finishReason: $finishReason ?? $this->finishReason,
-            userId: $userId ?? $this->userId,
-            sessionId: $sessionId ?? $this->sessionId,
-            tools: $tools ?? $this->tools,
             attributes: $attributes ?? $this->attributes,
-            messages: $messages ?? $this->messages,
+            data: $data ?? $this->data,
         );
     }
 }

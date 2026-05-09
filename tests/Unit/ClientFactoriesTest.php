@@ -47,14 +47,14 @@ final class ClientFactoriesTest extends TestCase
 
     public function testLoggerFactoryReturnsMesh0Logger(): void
     {
-        $logger = $this->client()->logger(appId: 'web', environment: 'prod');
+        $logger = $this->client()->logger(defaults: ['app.id' => 'web', 'app.environment' => 'prod']);
         $this->assertInstanceOf(Mesh0Logger::class, $logger);
     }
 
     public function testLoggerFactoryThreadsTracerThroughToLogger(): void
     {
         $client = $this->client();
-        $tracer = $client->tracer(appId: 'web');
+        $tracer = $client->tracer();
         $logger = $client->logger(bufferSize: 1, tracer: $tracer);
 
         $h = $tracer->enter('block.execute');
@@ -69,7 +69,7 @@ final class ClientFactoriesTest extends TestCase
 
     public function testTracerFactoryReturnsTracerWithAgentSink(): void
     {
-        $tracer = $this->client()->tracer(appId: 'web', environment: 'prod');
+        $tracer = $this->client()->tracer();
 
         $this->assertInstanceOf(Tracer::class, $tracer);
         $this->assertNull($tracer->currentTraceId());

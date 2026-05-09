@@ -99,4 +99,20 @@ final class MockHttpClient implements ClientInterface
         $event = $events[$index];
         return $event;
     }
+
+    /**
+     * All events from the last `/v1/events` request body.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function lastEventsBatch(): array
+    {
+        $body = $this->lastJsonBody();
+        $events = $body['events'] ?? null;
+        if (!\is_array($events)) {
+            throw new \RuntimeException('Last request body had no `events` array');
+        }
+        /** @var list<array<string, mixed>> $events */
+        return \array_values($events);
+    }
 }

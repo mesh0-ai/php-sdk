@@ -39,13 +39,19 @@ use Mesh0\Event\Event;
 
 $mesh0 = Client::create('m0_abcde_xxxxxxxxxxxxxxxxxxxxxxxx');
 
-// Send a single event
+// Send a single event. The wire shape is intentionally narrow — identity,
+// time, status, plus two open bins (`attributes` queryable, `data` opaque).
+// Anything domain-specific goes inside attributes / data.
 $mesh0->events->send(
     Event::now()
-        ->withApp('checkout', 'prod')
-        ->withOperation('charge.captured')
-        ->withUser('user_42')
-        ->withAttributes(['order_id' => 'ord_123', 'amount_usd' => 19.99]),
+        ->withAttributes([
+            'app.id'          => 'checkout',
+            'app.environment' => 'prod',
+            'span.name'       => 'charge.captured',
+            'user.id'         => 'user_42',
+            'order_id'        => 'ord_123',
+            'amount_usd'      => 19.99,
+        ]),
 );
 ```
 
@@ -63,7 +69,10 @@ The fastest way to start streaming telemetry to mesh0 is the bundled PSR-3
 logger. Plug it into any framework that takes a `Psr\Log\LoggerInterface`:
 
 ```php
-$logger = $mesh0->logger(appId: 'web', environment: 'prod');
+$logger = $mesh0->logger(defaults: [
+    'app.id'          => 'web',
+    'app.environment' => 'prod',
+]);
 
 $logger->info('user {user} signed up', ['user' => 'alice', 'plan' => 'pro']);
 
@@ -73,30 +82,42 @@ try {
     $logger->error('charge failed', [
         'exception' => $e,
         'order_id'  => $order->id,
-        'user_id'   => $order->userId,
+        'user.id'   => $order->userId,
     ]);
 }
 ```
 
-Special context keys are lifted onto first-class event fields:
+Context keys that map to wire-level event fields are lifted out; everything
+else is merged into `attributes`:
 
-| Context key       | Mapped to             |
-| ----------------- | --------------------- |
-| `trace_id`        | `trace_id`            |
-| `span_id`         | `span_id`             |
-| `parent_span_id`  | `parent_span_id`      |
-| `user_id`         | `user_id`             |
-| `session_id`      | `session_id`          |
-| `operation`       | `operation`           |
-| `duration_ms`     | `duration_ms`         |
-| `exception`       | `error_type` + `error_message`, `status=error` |
+| Context key       | Lifted to top-level wire field |
+| ----------------- | ------------------------------ |
+| `event_id`        | `event_id`                     |
+| `trace_id`        | `trace_id`                     |
+| `span_id`         | `span_id`                      |
+| `parent_span_id`  | `parent_span_id`               |
+| `duration_ms`     | `duration_ms`                  |
 
-Everything else is merged into `attributes`. Records are buffered in memory
-and flushed on `flush()`, when the buffer fills, and on shutdown.
+Plus: `exception` (Throwable) sets `status=error` and writes `error.type`
+and `error.message` into `attributes`. Severity ≥ `error` also sets
+`status=error`. The interpolated message and `log.level` always land in
+`attributes`. Records are buffered in memory and flushed on `flush()`,
+when the buffer fills, and on shutdown.
 
 If you pass a [`Tracer`](#instrumenting-nested-operations-tracer) to
 `logger(...)`, log records emitted inside an active span pick up
 `trace_id` / `span_id` automatically when you don't supply them yourself.
+
+The logger never throws — delivery failures are swallowed so your
+request path stays alive. Pass an optional `fallback` PSR-3 logger if
+you want visibility into why telemetry vanished:
+
+```php
+$logger = $mesh0->logger(
+    defaults: ['app.id' => 'web'],
+    fallback: $appLogger, // receives flush errors + malformed-input warnings
+);
+```
 
 ### Laravel
 
@@ -105,10 +126,10 @@ If you pass a [`Tracer`](#instrumenting-nested-operations-tracer) to
 'channels' => [
     'mesh0' => [
         'driver' => 'custom',
-        'via'    => fn () => Mesh0\Client::fromEnv()->logger(
-            appId: config('app.name'),
-            environment: config('app.env'),
-        ),
+        'via'    => fn () => Mesh0\Client::fromEnv()->logger(defaults: [
+            'app.id'          => config('app.name'),
+            'app.environment' => config('app.env'),
+        ]),
     ],
 ],
 ```
@@ -124,7 +145,11 @@ services:
         factory: ['Mesh0\Client', 'fromEnv']
     Psr\Log\LoggerInterface $mesh0Logger:
         factory: ['@Mesh0\Client', 'logger']
-        arguments: ['%env(APP_NAME)%', '%kernel.environment%']
+        # Pass defaults via the constructor's $defaults argument
+        arguments:
+            $defaults:
+                app.id: '%env(APP_NAME)%'
+                app.environment: '%kernel.environment%'
 ```
 
 ---
@@ -137,14 +162,23 @@ new builder.
 ```php
 $mesh0->events->send(
     Event::now()
-        ->withApp('agents', 'prod')
-        ->withOperation('agent.run')
-        ->withModel('anthropic', 'claude-opus-4-7')
-        ->withUsage(promptTokens: 1_240, completionTokens: 380, costUsd: 0.0184)
         ->withDurationMs(820)
         ->withTraceId($traceId)
-        ->withTools(['search', 'retrieve'])
-        ->withAttributes(['workflow' => 'onboarding']),
+        ->withAttributes([
+            'app.id'                       => 'agents',
+            'app.environment'              => 'prod',
+            'span.name'                    => 'agent.run',
+            'gen_ai.system'                => 'anthropic',
+            'gen_ai.request.model'         => 'claude-opus-4-7',
+            'gen_ai.usage.input_tokens'    => 1_240,
+            'gen_ai.usage.output_tokens'   => 380,
+            'gen_ai.usage.cost_usd'        => 0.0184,
+            'tools'                        => ['search', 'retrieve'],
+            'workflow'                     => 'onboarding',
+        ])
+        // Big payloads (LLM message arrays, raw req/resp) go in `data` —
+        // opaque, not TQL-queryable, only shown on single-event drilldown.
+        ->withData(['messages' => $messages]),
 );
 
 // Bulk: send up to 5,000 events per HTTP call. Larger batches are split.
@@ -240,9 +274,12 @@ $agent = $mesh0->events->agent(); // reads MESH0_AGENT_SOCKET / Config::$agentSo
 
 $agent->send(
     Mesh0\Event\Event::now()
-        ->withApp('checkout', 'prod')
-        ->withOperation('charge.succeeded')
-        ->withAttribute('order_id', 'ord_123'),
+        ->withAttributes([
+            'app.id'          => 'checkout',
+            'app.environment' => 'prod',
+            'span.name'       => 'charge.succeeded',
+            'order_id'        => 'ord_123',
+        ]),
 );
 
 // Bulk loop — the agent batches before forwarding to mesh0.
@@ -268,7 +305,7 @@ of `span_id`s, and emits exactly one event per closed span through any
 `EventSink` (typically the same agent sink shown above):
 
 ```php
-$tracer = $mesh0->tracer(appId: 'no-code-runtime', environment: 'prod');
+$tracer = $mesh0->tracer();
 
 // Closure form — exception-safe, auto-pop, recommended:
 $result = $tracer->span('block.if', ['block_id' => 'b_123'], function () use ($tracer) {
@@ -310,7 +347,10 @@ up `trace_id` / `span_id` automatically when not supplied in the PSR-3
 context:
 
 ```php
-$logger = $mesh0->logger(appId: 'no-code-runtime', tracer: $tracer);
+$logger = $mesh0->logger(
+    defaults: ['app.id' => 'no-code-runtime'],
+    tracer: $tracer,
+);
 
 $tracer->span('block.http_request', [], function () use ($logger) {
     $logger->info('calling upstream'); // trace_id / span_id stamped automatically
@@ -322,11 +362,16 @@ $tracer->span('block.http_request', [], function () use ($logger) {
 ## Querying
 
 ```php
+// Only `timestamp, duration_ms, project_id, status, trace_id, span_id,
+// parent_span_id` are TQL builtins. Anything else (e.g. `span.name` or
+// other `attributes` keys) must be exposed via a per-project alias or
+// promoted column — set those up in the dashboard, then reference them
+// by their alias name here.
 $rows = $mesh0->query->run([
     'from'    => 'events',
-    'select'  => ['operation', 'count()'],
+    'select'  => ['status', 'count()'],
     'where'   => ['status' => 'error'],
-    'groupBy' => ['operation'],
+    'groupBy' => ['status'],
     'orderBy' => [['count()', 'desc']],
     'limit'   => 25,
 ]);
