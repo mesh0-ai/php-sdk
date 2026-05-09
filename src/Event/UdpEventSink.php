@@ -22,7 +22,7 @@ use Psr\Log\NullLogger;
  * transition (open failure / write failure / oversize drop) so missing
  * telemetry is at least observable.
  */
-final class UdpEventSink
+final class UdpEventSink implements EventSink
 {
     public const DEFAULT_HOST = '127.0.0.1';
     public const DEFAULT_PORT = 8125;

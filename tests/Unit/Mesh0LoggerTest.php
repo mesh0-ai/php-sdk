@@ -8,7 +8,9 @@ use GuzzleHttp\Psr7\HttpFactory;
 use Mesh0\Client;
 use Mesh0\Config;
 use Mesh0\Logger\Mesh0Logger;
+use Mesh0\Tests\Support\InMemoryEventSink;
 use Mesh0\Tests\Support\MockHttpClient;
+use Mesh0\Trace\Tracer;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\LogLevel;
 
@@ -100,6 +102,38 @@ final class Mesh0LoggerTest extends TestCase
         $attributes = $event['attributes'];
         $this->assertIsArray($attributes);
         $this->assertArrayNotHasKey('trace_id', $attributes);
+    }
+
+    public function testTracerProvidesTraceContextWhenAbsentFromCallerContext(): void
+    {
+        $tracer = new Tracer(new InMemoryEventSink());
+        $logger = new Mesh0Logger(client: $this->client, bufferSize: 1, tracer: $tracer);
+
+        $h = $tracer->enter('block.execute');
+        $this->mock->queueJson(200, ['accepted' => 1]);
+        $logger->info('inside the span');
+
+        $event = $this->mock->lastEvent();
+        $this->assertSame($tracer->currentTraceId(), $event['trace_id']);
+        $this->assertSame($h->spanId, $event['span_id']);
+
+        $tracer->exit($h);
+    }
+
+    public function testCallerContextOverridesTracerWhenBothAreSet(): void
+    {
+        $tracer = new Tracer(new InMemoryEventSink());
+        $logger = new Mesh0Logger(client: $this->client, bufferSize: 1, tracer: $tracer);
+
+        $h = $tracer->enter('block.execute');
+        $this->mock->queueJson(200, ['accepted' => 1]);
+        $logger->info('explicit override', ['trace_id' => 'tr-explicit', 'span_id' => 'sp-explicit']);
+
+        $event = $this->mock->lastEvent();
+        $this->assertSame('tr-explicit', $event['trace_id']);
+        $this->assertSame('sp-explicit', $event['span_id']);
+
+        $tracer->exit($h);
     }
 
     public function testMinimumLevelFiltersLowerSeverities(): void
