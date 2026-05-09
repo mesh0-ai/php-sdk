@@ -16,28 +16,30 @@ use Throwable;
 /**
  * PSR-3 logger that ships log records to mesh0 as events.
  *
- * Drop into any PSR-3 aware framework (Laravel, Symfony, Slim, …) and your
- * logs become first-class telemetry — searchable, queryable via TQL, and
- * tied to traces if you pass `trace_id` in the context.
+ * Drop into any PSR-3 aware framework (Laravel, Symfony, Slim, …) and
+ * your logs become first-class telemetry — searchable, queryable via
+ * TQL, and tied to traces if you pass `trace_id` in the context.
  *
- * Records are buffered in memory and flushed when the buffer fills, when
- * `flush()` is called, or on shutdown. The shutdown handler is registered
- * lazily on first use so importing the class has no side effects.
+ * Records are buffered in memory and flushed when the buffer fills,
+ * when `flush()` is called, or on shutdown. The shutdown handler is
+ * registered lazily on first use so importing the class has no side
+ * effects.
  *
- * ### Special context keys
+ * ### Mapping
  *
- * The following keys are extracted from the PSR-3 context and mapped onto
- * the corresponding event fields rather than dumped into `attributes`:
+ * The following PSR-3 context keys are lifted onto the corresponding
+ * wire-level fields:
  *
- * - `trace_id`, `span_id`, `parent_span_id` → trace correlation
- * - `user_id`, `session_id`                  → user attribution
- * - `operation`                              → event operation name
- * - `duration_ms`                            → event duration
- * - `exception` (Throwable)                  → mapped to error_type / error_message
- * - everything else                          → merged into `attributes`
+ * - `event_id`                                 → top-level `event_id`
+ * - `trace_id`, `span_id`, `parent_span_id`    → trace correlation
+ * - `duration_ms`                              → top-level `duration_ms`
  *
- * The PSR-3 message is interpolated per the spec (`{key}` placeholders) and
- * stored under `attributes.message`.
+ * Status is `error` if an `exception` is supplied or the level is
+ * `error` or higher; otherwise `success`. Everything else — including
+ * `level`, the interpolated message, the `defaults` map, and any
+ * remaining context keys — is merged into `attributes`. Conventional
+ * keys used: `log.level`, `message`, and (when an exception is
+ * supplied) `error.type` / `error.message`.
  */
 final class Mesh0Logger extends AbstractLogger
 {
@@ -53,6 +55,16 @@ final class Mesh0Logger extends AbstractLogger
         LogLevel::EMERGENCY => 7,
     ];
 
+    /** Context keys lifted to top-level wire fields. */
+    private const RESERVED_CONTEXT_KEYS = [
+        'event_id',
+        'trace_id',
+        'span_id',
+        'parent_span_id',
+        'duration_ms',
+        'exception',
+    ];
+
     /** @var list<Event> */
     private array $buffer = [];
 
@@ -61,8 +73,6 @@ final class Mesh0Logger extends AbstractLogger
     /** @param array<string, mixed> $defaults */
     public function __construct(
         private readonly Client $client,
-        private readonly ?string $appId = null,
-        private readonly ?string $environment = null,
         private readonly int $bufferSize = 50,
         private readonly array $defaults = [],
         private readonly string $minimumLevel = LogLevel::DEBUG,
@@ -109,6 +119,7 @@ final class Mesh0Logger extends AbstractLogger
     {
         $message = $this->interpolate($rawMessage, $context);
 
+        $eventId = self::stringOrNull($context['event_id'] ?? null);
         $traceId = self::stringOrNull($context['trace_id'] ?? null);
         $spanId = self::stringOrNull($context['span_id'] ?? null);
         $parentSpanId = self::stringOrNull($context['parent_span_id'] ?? null);
@@ -120,40 +131,34 @@ final class Mesh0Logger extends AbstractLogger
             $traceId ??= $this->tracer->currentTraceId();
             $spanId ??= $this->tracer->currentSpanId();
         }
-        $userId = self::stringOrNull($context['user_id'] ?? null);
-        $sessionId = self::stringOrNull($context['session_id'] ?? null);
-        $operation = self::stringOrNull($context['operation'] ?? null) ?? 'log.' . $level;
+
         $duration = $context['duration_ms'] ?? null;
         $durationMs = is_int($duration) || is_float($duration) ? (float) $duration : null;
 
         $exception = $context['exception'] ?? null;
-        $errorType = null;
-        $errorMessage = null;
-        if ($exception instanceof Throwable) {
-            $errorType = $exception::class;
-            $errorMessage = $exception->getMessage();
-        }
-
-        $isError = $errorType !== null
+        $isError = $exception instanceof Throwable
             || self::LEVEL_RANK[$level] >= self::LEVEL_RANK[LogLevel::ERROR];
 
-        $reserved = ['trace_id', 'span_id', 'parent_span_id', 'user_id', 'session_id', 'operation', 'duration_ms', 'exception'];
         $attributes = $this->defaults;
         foreach ($context as $key => $value) {
-            if (in_array($key, $reserved, true)) {
+            if (in_array($key, self::RESERVED_CONTEXT_KEYS, true)) {
                 continue;
             }
             $attributes[(string) $key] = $value;
         }
         $attributes['log.level'] = $level;
         $attributes['message'] = $message;
+        if ($exception instanceof Throwable) {
+            $attributes['error.type'] = $exception::class;
+            $attributes['error.message'] = $exception->getMessage();
+        }
 
         $builder = Event::now()
-            ->withOperation($operation)
-            ->withStatus($isError ? Status::Error : Status::Success);
+            ->withStatus($isError ? Status::Error : Status::Success)
+            ->withAttributes($attributes);
 
-        if ($this->appId !== null || $this->environment !== null) {
-            $builder = $builder->withApp($this->appId ?? '', $this->environment);
+        if ($eventId !== null) {
+            $builder = $builder->withEventId($eventId);
         }
         if ($traceId !== null) {
             $builder = $builder->withTraceId($traceId);
@@ -161,19 +166,9 @@ final class Mesh0Logger extends AbstractLogger
         if ($spanId !== null) {
             $builder = $builder->withSpan($spanId, $parentSpanId);
         }
-        if ($userId !== null) {
-            $builder = $builder->withUser($userId);
-        }
-        if ($sessionId !== null) {
-            $builder = $builder->withSession($sessionId);
-        }
         if ($durationMs !== null) {
             $builder = $builder->withDurationMs($durationMs);
         }
-        if ($errorType !== null && $errorMessage !== null) {
-            $builder = $builder->withError($errorType, $errorMessage);
-        }
-        $builder = $builder->withAttributes($attributes);
 
         return $builder->build();
     }

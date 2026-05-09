@@ -36,9 +36,8 @@ final class Mesh0LoggerTest extends TestCase
     {
         $logger = new Mesh0Logger(
             client: $this->client,
-            appId: 'web',
-            environment: 'prod',
             bufferSize: 10,
+            defaults: ['app.id' => 'web', 'app.environment' => 'prod'],
         );
 
         $logger->info('user {user} signed up', ['user' => 'alice', 'plan' => 'pro']);
@@ -49,17 +48,17 @@ final class Mesh0LoggerTest extends TestCase
 
         $this->assertCount(1, $this->mock->requests);
         $event = $this->mock->lastEvent();
-        $this->assertSame('log.info', $event['operation']);
-        $this->assertSame('web', $event['app_id']);
         $this->assertSame('success', $event['status']);
         $attributes = $event['attributes'];
         $this->assertIsArray($attributes);
         $this->assertSame('user alice signed up', $attributes['message']);
         $this->assertSame('pro', $attributes['plan']);
+        $this->assertSame('web', $attributes['app.id']);
+        $this->assertSame('prod', $attributes['app.environment']);
         $this->assertSame(LogLevel::INFO, $attributes['log.level']);
     }
 
-    public function testErrorWithExceptionMapsErrorFields(): void
+    public function testErrorWithExceptionMapsErrorAttributes(): void
     {
         $logger = new Mesh0Logger(client: $this->client, bufferSize: 1);
 
@@ -68,10 +67,10 @@ final class Mesh0LoggerTest extends TestCase
 
         $event = $this->mock->lastEvent();
         $this->assertSame('error', $event['status']);
-        $this->assertSame('RuntimeException', $event['error_type']);
-        $this->assertSame('boom', $event['error_message']);
         $attributes = $event['attributes'];
         $this->assertIsArray($attributes);
+        $this->assertSame('RuntimeException', $attributes['error.type']);
+        $this->assertSame('boom', $attributes['error.message']);
         $this->assertSame('ord_1', $attributes['order_id']);
     }
 
@@ -84,24 +83,28 @@ final class Mesh0LoggerTest extends TestCase
             'trace_id' => 'tr-1',
             'span_id' => 'sp-1',
             'parent_span_id' => 'sp-0',
+            'duration_ms' => 12.5,
             'user_id' => 'u-1',
             'session_id' => 's-1',
-            'operation' => 'http.request',
-            'duration_ms' => 12.5,
         ]);
 
         $event = $this->mock->lastEvent();
+        // Wire-shape fields are lifted to top-level.
         $this->assertSame('tr-1', $event['trace_id']);
         $this->assertSame('sp-1', $event['span_id']);
         $this->assertSame('sp-0', $event['parent_span_id']);
-        $this->assertSame('u-1', $event['user_id']);
-        $this->assertSame('s-1', $event['session_id']);
-        $this->assertSame('http.request', $event['operation']);
         $this->assertSame(12.5, $event['duration_ms']);
-        // The reserved keys should not also leak into attributes.
+
         $attributes = $event['attributes'];
         $this->assertIsArray($attributes);
+        // user_id/session_id aren't wire fields anymore — they ride in attributes.
+        $this->assertSame('u-1', $attributes['user_id']);
+        $this->assertSame('s-1', $attributes['session_id']);
+        // The lifted wire-shape keys must not also leak into attributes.
         $this->assertArrayNotHasKey('trace_id', $attributes);
+        $this->assertArrayNotHasKey('span_id', $attributes);
+        $this->assertArrayNotHasKey('parent_span_id', $attributes);
+        $this->assertArrayNotHasKey('duration_ms', $attributes);
     }
 
     public function testTracerProvidesTraceContextWhenAbsentFromCallerContext(): void

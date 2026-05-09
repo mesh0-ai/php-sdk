@@ -14,54 +14,60 @@ final class EventBuilderTest extends TestCase
     public function testBuildsCompleteWirePayload(): void
     {
         $event = Event::at(new DateTimeImmutable('2026-05-08T12:00:00.123Z'))
-            ->withApp('checkout', 'prod')
-            ->withOperation('charge.captured')
-            ->withModel('anthropic', 'claude-opus-4-7')
-            ->withUsage(promptTokens: 100, completionTokens: 50, totalTokens: 150, costUsd: 0.012)
+            ->withEventId('evt_1')
             ->withDurationMs(420.5)
-            ->withUser('user_42')
-            ->withSession('sess_99')
             ->withTraceId('trace-1')
             ->withSpan('span-1', 'span-0')
             ->withStatus(Status::Success)
-            ->withTools(['search', 'retrieve'])
-            ->withAttributes(['order_id' => 'ord_1'])
+            ->withAttributes(['order_id' => 'ord_1', 'app.id' => 'checkout'])
             ->withAttribute('amount_usd', 19.99)
-            ->withMessages([['role' => 'user', 'content' => 'hi']])
+            ->withData(['messages' => [['role' => 'user', 'content' => 'hi']]])
             ->build();
 
         $arr = $event->toArray();
 
         $this->assertSame('2026-05-08T12:00:00.123Z', $arr['timestamp']);
-        $this->assertSame('checkout', $arr['app_id']);
-        $this->assertSame('prod', $arr['environment']);
-        $this->assertSame('charge.captured', $arr['operation']);
-        $this->assertSame(['provider' => 'anthropic', 'id' => 'claude-opus-4-7'], $arr['model']);
-        $this->assertSame(
-            ['prompt_tokens' => 100, 'completion_tokens' => 50, 'total_tokens' => 150, 'cost_usd' => 0.012],
-            $arr['usage'],
-        );
+        $this->assertSame('evt_1', $arr['event_id']);
         $this->assertSame(420.5, $arr['duration_ms']);
-        $this->assertSame('user_42', $arr['user_id']);
-        $this->assertSame('sess_99', $arr['session_id']);
         $this->assertSame('trace-1', $arr['trace_id']);
         $this->assertSame('span-1', $arr['span_id']);
         $this->assertSame('span-0', $arr['parent_span_id']);
         $this->assertSame('success', $arr['status']);
-        $this->assertSame(['search', 'retrieve'], $arr['tools']);
-        $this->assertSame(['order_id' => 'ord_1', 'amount_usd' => 19.99], $arr['attributes']);
+        $this->assertSame(
+            ['order_id' => 'ord_1', 'app.id' => 'checkout', 'amount_usd' => 19.99],
+            $arr['attributes'],
+        );
+        $this->assertSame(['messages' => [['role' => 'user', 'content' => 'hi']]], $arr['data']);
     }
 
-    public function testWithErrorMarksStatusAndFields(): void
+    public function testWithStatusError(): void
     {
         $arr = Event::now()
-            ->withError('TimeoutError', 'upstream took too long')
+            ->withStatus(Status::Error)
+            ->withAttributes([
+                'error.type' => 'TimeoutError',
+                'error.message' => 'upstream took too long',
+            ])
             ->build()
             ->toArray();
 
         $this->assertSame('error', $arr['status']);
-        $this->assertSame('TimeoutError', $arr['error_type']);
-        $this->assertSame('upstream took too long', $arr['error_message']);
+        $attributes = $arr['attributes'];
+        $this->assertIsArray($attributes);
+        $this->assertSame('TimeoutError', $attributes['error.type']);
+        $this->assertSame('upstream took too long', $attributes['error.message']);
+    }
+
+    public function testRejectsLegacyTopLevelFields(): void
+    {
+        // Wire decoder runs DisallowUnknownFields. Confirm the SDK no longer
+        // emits the legacy top-level fields that were promoted in 1.x — they
+        // must now ride inside `attributes` or `data`.
+        $arr = Event::now()->withAttribute('app.id', 'checkout')->build()->toArray();
+
+        foreach (['app_id', 'environment', 'operation', 'model', 'usage', 'user_id', 'session_id', 'tools', 'messages', 'finish_reason', 'error_type', 'error_message'] as $legacy) {
+            $this->assertArrayNotHasKey($legacy, $arr, "legacy field '{$legacy}' must not appear top-level");
+        }
     }
 
     public function testMinimalEventOnlySerializesTimestamp(): void
@@ -73,9 +79,13 @@ final class EventBuilderTest extends TestCase
     public function testBuilderIsImmutable(): void
     {
         $base = Event::now();
-        $a = $base->withOperation('a');
-        $b = $base->withOperation('b');
-        $this->assertSame('a', $a->build()->toArray()['operation']);
-        $this->assertSame('b', $b->build()->toArray()['operation']);
+        $a = $base->withAttribute('span.name', 'a');
+        $b = $base->withAttribute('span.name', 'b');
+        $aAttrs = $a->build()->toArray()['attributes'];
+        $bAttrs = $b->build()->toArray()['attributes'];
+        $this->assertIsArray($aAttrs);
+        $this->assertIsArray($bAttrs);
+        $this->assertSame('a', $aAttrs['span.name']);
+        $this->assertSame('b', $bAttrs['span.name']);
     }
 }

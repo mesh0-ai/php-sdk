@@ -35,11 +35,12 @@ final class TracerTest extends TestCase
         $this->assertNotNull($event->spanId);
         $this->assertMatchesRegularExpression('/^[0-9a-f]{16}$/', $event->spanId);
         $this->assertNull($event->parentSpanId);
-        $this->assertSame('block.execute', $event->operation);
+        $this->assertNotNull($event->attributes);
+        $this->assertSame('block.execute', $event->attributes['span.name']);
+        $this->assertSame('b_1', $event->attributes['block_id']);
         $this->assertSame(Status::Success, $event->status);
         $this->assertNotNull($event->durationMs);
         $this->assertGreaterThanOrEqual(0.0, $event->durationMs);
-        $this->assertSame(['block_id' => 'b_1'], $event->attributes);
     }
 
     public function testNestedSpansShareTraceIdAndChainParents(): void
@@ -110,8 +111,9 @@ final class TracerTest extends TestCase
         $this->assertCount(1, $this->sink->events);
         $event = $this->sink->events[0];
         $this->assertSame(Status::Error, $event->status);
-        $this->assertSame(RuntimeException::class, $event->errorType);
-        $this->assertSame('boom', $event->errorMessage);
+        $this->assertNotNull($event->attributes);
+        $this->assertSame(RuntimeException::class, $event->attributes['error.type']);
+        $this->assertSame('boom', $event->attributes['error.message']);
     }
 
     public function testThrowingChildStillLetsParentClose(): void
@@ -173,17 +175,6 @@ final class TracerTest extends TestCase
         $tracer->exit($h);
     }
 
-    public function testAppAndEnvironmentApplyToEverySpan(): void
-    {
-        $tracer = new Tracer($this->sink, appId: 'no-code-runtime', environment: 'prod');
-
-        $tracer->span('block.execute', [], static fn () => null);
-
-        $event = $this->sink->events[0];
-        $this->assertSame('no-code-runtime', $event->appId);
-        $this->assertSame('prod', $event->environment);
-    }
-
     public function testExitMergesAttributesOverEnter(): void
     {
         $tracer = new Tracer($this->sink);
@@ -192,11 +183,11 @@ final class TracerTest extends TestCase
         $tracer->exit($h, attributes: ['iterations' => 7, 'completed' => true]);
 
         $event = $this->sink->events[0];
-        $this->assertSame([
-            'block_id' => 'b_1',
-            'iterations' => 7,
-            'completed' => true,
-        ], $event->attributes);
+        $this->assertNotNull($event->attributes);
+        $this->assertSame('b_1', $event->attributes['block_id']);
+        $this->assertSame(7, $event->attributes['iterations']);
+        $this->assertTrue($event->attributes['completed']);
+        $this->assertSame('block.loop', $event->attributes['span.name']);
     }
 
     public function testCurrentTraceAndSpanIdReflectStack(): void
@@ -253,9 +244,6 @@ final class TracerTest extends TestCase
         $tracer->span('second', [], static fn () => null);
 
         $this->assertCount(2, $this->sink->events);
-        // Without an explicit reset(), trace_id is reused — both spans are
-        // siblings of the same trace. Customers wanting per-execution traces
-        // call reset() between them; long-lived workers must do this anyway.
         $this->assertSame(
             $this->sink->events[0]->traceId,
             $this->sink->events[1]->traceId,
@@ -279,7 +267,6 @@ final class TracerTest extends TestCase
         $logger = new RecordingLogger();
         $tracer = new Tracer($this->sink, logger: $logger);
 
-        // Construct a handle that the tracer never issued.
         $h = $tracer->enter('real');
         $tracer->exit($h);
         // Re-exit the same handle.
@@ -306,7 +293,9 @@ final class TracerTest extends TestCase
         // Only `outer` is emitted; `middle` and `inner` are dropped, but a
         // warning records the loss so it isn't silent data loss.
         $this->assertCount(1, $this->sink->events);
-        $this->assertSame('outer', $this->sink->events[0]->operation);
+        $event = $this->sink->events[0];
+        $this->assertNotNull($event->attributes);
+        $this->assertSame('outer', $event->attributes['span.name']);
         $this->assertFalse($tracer->hasOpenSpan());
 
         $warnings = array_values(array_filter(
@@ -316,18 +305,6 @@ final class TracerTest extends TestCase
         $this->assertCount(1, $warnings);
         $this->assertSame(2, $warnings[0]['context']['dropped_count']);
         $this->assertSame(['middle', 'inner'], $warnings[0]['context']['dropped_operations']);
-    }
-
-    public function testEnvironmentOnlyConstructionStillStampsAppFields(): void
-    {
-        // Regression guard for the `withApp($appId ?? '', $environment)` branch
-        // when only one of the two is configured.
-        $tracer = new Tracer($this->sink, environment: 'staging');
-        $tracer->span('block.execute', [], static fn () => null);
-
-        $event = $this->sink->events[0];
-        $this->assertSame('', $event->appId);
-        $this->assertSame('staging', $event->environment);
     }
 
     public function testStartTraceAcceptsAnyFlagsByteAsW3CRequires(): void

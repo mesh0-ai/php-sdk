@@ -65,14 +65,16 @@ final class ClientAgentSinkIntegrationTest extends TestCase
         $client = $this->client(socketPath: $this->sockPath);
 
         $client->events()->agent()->send(
-            Event::now()->withOperation('client.agent.event'),
+            Event::now()->withAttribute('span.name', 'client.agent.event'),
         );
 
         $packet = $this->receiveOnePacket();
         $this->assertNotNull($packet);
         /** @var array<string, mixed> $decoded */
         $decoded = \json_decode($packet, true, flags: \JSON_THROW_ON_ERROR);
-        $this->assertSame('client.agent.event', $decoded['operation'] ?? null);
+        $attributes = $decoded['attributes'] ?? null;
+        $this->assertIsArray($attributes);
+        $this->assertSame('client.agent.event', $attributes['span.name'] ?? null);
     }
 
     public function testPerCallSocketPathOverridesConfig(): void

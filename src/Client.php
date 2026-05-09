@@ -32,9 +32,12 @@ use Psr\Log\LoggerInterface;
  *   $mesh0 = Mesh0\Client::create('m0_abc12_…');
  *   $mesh0->events()->send(
  *       Mesh0\Event\Event::now()
- *           ->withApp('checkout', 'prod')
- *           ->withOperation('charge.succeeded')
- *           ->withAttributes(['order_id' => 'ord_123']),
+ *           ->withAttributes([
+ *               'app.id' => 'checkout',
+ *               'app.environment' => 'prod',
+ *               'span.name' => 'charge.succeeded',
+ *               'order_id' => 'ord_123',
+ *           ]),
  *   );
  */
 final class Client
@@ -146,19 +149,18 @@ final class Client
      * Logs are buffered in memory and flushed on `flush()` / on shutdown / when
      * the buffer fills. See {@see Mesh0Logger} for the full set of options.
      *
+     * To stamp every record with constant tags (app id, environment, …),
+     * pass them via `$defaults` — they are merged into `attributes`.
+     *
      * @param array<string, mixed> $defaults Default attributes merged into every record.
      */
     public function logger(
-        ?string $appId = null,
-        ?string $environment = null,
         int $bufferSize = 50,
         array $defaults = [],
         ?Tracer $tracer = null,
     ): LoggerInterface {
         return new Mesh0Logger(
             client: $this,
-            appId: $appId,
-            environment: $environment,
             bufferSize: $bufferSize,
             defaults: $defaults,
             tracer: $tracer,
@@ -171,15 +173,10 @@ final class Client
      * `new Tracer(...)` directly if you want a different sink (e.g. an
      * in-memory test sink or a custom transport).
      */
-    public function tracer(
-        ?string $appId = null,
-        ?string $environment = null,
-        ?LoggerInterface $logger = null,
-    ): Tracer {
+    public function tracer(?LoggerInterface $logger = null): Tracer
+    {
         return new Tracer(
             sink: $this->events->agent(),
-            appId: $appId,
-            environment: $environment,
             logger: $logger,
         );
     }

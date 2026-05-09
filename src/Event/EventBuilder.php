@@ -9,16 +9,19 @@ use DateTimeInterface;
 /**
  * Fluent builder for {@see Event}.
  *
- * Each `with*` method returns a new builder, so the builder is safe to share
- * and reuse — no hidden mutation. Call {@see build()} to materialize the
- * immutable {@see Event}, or pass the builder directly to a sender (the
- * sender will call `build()` internally).
+ * Each `with*` method returns a new builder, so the builder is safe to
+ * share and reuse — no hidden mutation. Surface mirrors the wire shape:
+ * identity (event/trace/span ids), time/duration, status, plus the two
+ * open bins (`attributes`, `data`). Anything else — model, usage, user,
+ * environment, operation, error info, etc. — belongs inside
+ * `attributes` (queryable) or `data` (opaque). Pick keys that match your
+ * project's TQL aliases / promoted fields.
  */
 final readonly class EventBuilder
 {
     /**
-     * @param list<string>|null         $tools
      * @param array<string, mixed>|null $attributes
+     * @param array<string, mixed>|null $data
      */
     public function __construct(
         private DateTimeInterface $timestamp,
@@ -27,20 +30,9 @@ final readonly class EventBuilder
         private ?string $traceId = null,
         private ?string $spanId = null,
         private ?string $parentSpanId = null,
-        private ?string $appId = null,
-        private ?string $environment = null,
-        private ?string $operation = null,
         private ?Status $status = null,
-        private ?string $errorType = null,
-        private ?string $errorMessage = null,
-        private ?Model $model = null,
-        private ?Usage $usage = null,
-        private ?string $finishReason = null,
-        private ?string $userId = null,
-        private ?string $sessionId = null,
-        private ?array $tools = null,
         private ?array $attributes = null,
-        private mixed $messages = null,
+        private ?array $data = null,
     ) {
     }
 
@@ -64,68 +56,9 @@ final readonly class EventBuilder
         return $this->copy(spanId: $spanId, parentSpanId: $parentSpanId);
     }
 
-    public function withApp(string $appId, ?string $environment = null): self
-    {
-        return $this->copy(appId: $appId, environment: $environment);
-    }
-
-    public function withOperation(string $operation): self
-    {
-        return $this->copy(operation: $operation);
-    }
-
     public function withStatus(Status $status): self
     {
         return $this->copy(status: $status);
-    }
-
-    public function withError(string $type, string $message): self
-    {
-        return $this->copy(status: Status::Error, errorType: $type, errorMessage: $message);
-    }
-
-    public function withModel(string $provider, string $id): self
-    {
-        return $this->copy(model: new Model($provider, $id));
-    }
-
-    public function withUsage(
-        ?int $promptTokens = null,
-        ?int $completionTokens = null,
-        ?int $totalTokens = null,
-        ?float $costUsd = null,
-    ): self {
-        return $this->copy(usage: new Usage($promptTokens, $completionTokens, $totalTokens, $costUsd));
-    }
-
-    public function withFinishReason(string $reason): self
-    {
-        return $this->copy(finishReason: $reason);
-    }
-
-    /**
-     * Tag the event with your application's end-user id.
-     *
-     * This is *not* the mesh0 platform user that minted the API key — the
-     * key already identifies your project. `user_id` is the user inside
-     * your product (analogous to OpenAI's `user` param), used for
-     * attribution and filtering in the dashboard / TQL.
-     */
-    public function withUser(string $userId): self
-    {
-        return $this->copy(userId: $userId);
-    }
-
-    /** Tag the event with an application session id (your product's session, not mesh0's). */
-    public function withSession(string $sessionId): self
-    {
-        return $this->copy(sessionId: $sessionId);
-    }
-
-    /** @param list<string> $tools */
-    public function withTools(array $tools): self
-    {
-        return $this->copy(tools: $tools);
     }
 
     /** @param array<string, mixed> $attributes */
@@ -140,9 +73,10 @@ final readonly class EventBuilder
         return $this->withAttributes([$key => $value]);
     }
 
-    public function withMessages(mixed $messages): self
+    /** @param array<string, mixed> $data */
+    public function withData(array $data): self
     {
-        return $this->copy(messages: $messages);
+        return $this->copy(data: $data);
     }
 
     public function build(): Event
@@ -154,26 +88,15 @@ final readonly class EventBuilder
             traceId: $this->traceId,
             spanId: $this->spanId,
             parentSpanId: $this->parentSpanId,
-            appId: $this->appId,
-            environment: $this->environment,
-            operation: $this->operation,
             status: $this->status,
-            errorType: $this->errorType,
-            errorMessage: $this->errorMessage,
-            model: $this->model,
-            usage: $this->usage,
-            finishReason: $this->finishReason,
-            userId: $this->userId,
-            sessionId: $this->sessionId,
-            tools: $this->tools,
             attributes: $this->attributes,
-            messages: $this->messages,
+            data: $this->data,
         );
     }
 
     /**
-     * @param list<string>|null         $tools
      * @param array<string, mixed>|null $attributes
+     * @param array<string, mixed>|null $data
      */
     private function copy(
         ?DateTimeInterface $timestamp = null,
@@ -182,20 +105,9 @@ final readonly class EventBuilder
         ?string $traceId = null,
         ?string $spanId = null,
         ?string $parentSpanId = null,
-        ?string $appId = null,
-        ?string $environment = null,
-        ?string $operation = null,
         ?Status $status = null,
-        ?string $errorType = null,
-        ?string $errorMessage = null,
-        ?Model $model = null,
-        ?Usage $usage = null,
-        ?string $finishReason = null,
-        ?string $userId = null,
-        ?string $sessionId = null,
-        ?array $tools = null,
         ?array $attributes = null,
-        mixed $messages = null,
+        ?array $data = null,
     ): self {
         return new self(
             timestamp: $timestamp ?? $this->timestamp,
@@ -204,20 +116,9 @@ final readonly class EventBuilder
             traceId: $traceId ?? $this->traceId,
             spanId: $spanId ?? $this->spanId,
             parentSpanId: $parentSpanId ?? $this->parentSpanId,
-            appId: $appId ?? $this->appId,
-            environment: $environment ?? $this->environment,
-            operation: $operation ?? $this->operation,
             status: $status ?? $this->status,
-            errorType: $errorType ?? $this->errorType,
-            errorMessage: $errorMessage ?? $this->errorMessage,
-            model: $model ?? $this->model,
-            usage: $usage ?? $this->usage,
-            finishReason: $finishReason ?? $this->finishReason,
-            userId: $userId ?? $this->userId,
-            sessionId: $sessionId ?? $this->sessionId,
-            tools: $tools ?? $this->tools,
             attributes: $attributes ?? $this->attributes,
-            messages: $messages ?? $this->messages,
+            data: $data ?? $this->data,
         );
     }
 }

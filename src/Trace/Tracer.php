@@ -13,13 +13,14 @@ use Psr\Log\NullLogger;
 use Throwable;
 
 /**
- * Builds a trace tree from nested span enter/exit calls and ships each span
- * to a sink as an independent event.
+ * Builds a trace tree from nested span enter/exit calls and ships each
+ * span to a sink as an independent event.
  *
  * Each span produces exactly one event on `exit()`, carrying `trace_id`,
- * `span_id`, `parent_span_id`, and `duration_ms`. Spans are independent on
- * the wire — there are no "session start"/"session end" markers; the trace
- * is reassembled server-side by `trace_id`.
+ * `span_id`, `parent_span_id`, `duration_ms`, and `status`. The span's
+ * operation name is written to `attributes["span.name"]` to mirror the
+ * OTLP path documented in DATA_MODEL.md. Errors land as
+ * `attributes["error.type"]` and `attributes["error.message"]`.
  *
  * Closure form (recommended — exception-safe):
  *
@@ -65,8 +66,6 @@ final class Tracer
 
     public function __construct(
         private readonly EventSink $sink,
-        private readonly ?string $appId = null,
-        private readonly ?string $environment = null,
         ?LoggerInterface $logger = null,
     ) {
         $this->logger = $logger ?? new NullLogger();
@@ -186,7 +185,8 @@ final class Tracer
     }
 
     /**
-     * Close a span on the error path, capturing the exception type and message.
+     * Close a span on the error path, capturing the exception type and
+     * message into `attributes["error.type"]` / `attributes["error.message"]`.
      *
      * @param array<string, mixed> $attributes Merged on top of the attributes passed to {@see enter()}.
      */
@@ -279,26 +279,21 @@ final class Tracer
         }
 
         $durationMs = (\hrtime(true) - $handle->startedHrTimeNs) / 1_000_000.0;
-        $attributes = $extraAttributes === []
-            ? $handle->attributes
-            : \array_merge($handle->attributes, $extraAttributes);
+        $attributes = \array_merge($handle->attributes, $extraAttributes);
+        $attributes['span.name'] = $handle->operation;
+        if ($errorType !== null) {
+            $attributes['error.type'] = $errorType;
+        }
+        if ($errorMessage !== null) {
+            $attributes['error.message'] = $errorMessage;
+        }
 
         $builder = (new EventBuilder($handle->startedAt))
             ->withTraceId($handle->traceId)
             ->withSpan($handle->spanId, $handle->parentSpanId)
-            ->withOperation($handle->operation)
             ->withDurationMs($durationMs)
-            ->withStatus($status);
-
-        if ($this->appId !== null || $this->environment !== null) {
-            $builder = $builder->withApp($this->appId ?? '', $this->environment);
-        }
-        if ($attributes !== []) {
-            $builder = $builder->withAttributes($attributes);
-        }
-        if ($errorType !== null && $errorMessage !== null) {
-            $builder = $builder->withError($errorType, $errorMessage);
-        }
+            ->withStatus($status)
+            ->withAttributes($attributes);
 
         $this->sink->send($builder);
     }

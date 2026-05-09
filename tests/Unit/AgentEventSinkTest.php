@@ -49,9 +49,12 @@ final class AgentEventSinkTest extends TestCase
         $sink = new AgentEventSink($this->sockPath);
 
         $event = Event::now()
-            ->withApp('checkout', 'prod')
-            ->withOperation('charge.succeeded')
-            ->withAttribute('order_id', 'ord_123');
+            ->withAttributes([
+                'app.id' => 'checkout',
+                'app.environment' => 'prod',
+                'span.name' => 'charge.succeeded',
+                'order_id' => 'ord_123',
+            ]);
 
         $sink->send($event);
 
@@ -59,8 +62,10 @@ final class AgentEventSinkTest extends TestCase
         $this->assertNotNull($packet);
         /** @var array<string, mixed> $decoded */
         $decoded = \json_decode($packet, true, flags: \JSON_THROW_ON_ERROR);
-        $this->assertSame('checkout', $decoded['app_id'] ?? null);
-        $this->assertSame('charge.succeeded', $decoded['operation'] ?? null);
+        $attributes = $decoded['attributes'] ?? null;
+        $this->assertIsArray($attributes);
+        $this->assertSame('checkout', $attributes['app.id'] ?? null);
+        $this->assertSame('charge.succeeded', $attributes['span.name'] ?? null);
         $sink->close();
     }
 
@@ -72,8 +77,8 @@ final class AgentEventSinkTest extends TestCase
             $logger,
         );
 
-        $sink->send(Event::now()->withOperation('a'));
-        $sink->send(Event::now()->withOperation('b'));
+        $sink->send(Event::now()->withAttribute('span.name', 'a'));
+        $sink->send(Event::now()->withAttribute('span.name', 'b'));
 
         $warnings = $logger->recordsAt('warning');
         $this->assertCount(1, $warnings);
@@ -87,7 +92,7 @@ final class AgentEventSinkTest extends TestCase
 
         $huge = str_repeat('x', AgentEventSink::MAX_DATAGRAM_BYTES);
         $event = Event::now()
-            ->withOperation('big')
+            ->withAttribute('span.name', 'big')
             ->withAttribute('blob', $huge);
 
         $sink->send($event);
@@ -108,7 +113,7 @@ final class AgentEventSinkTest extends TestCase
         // JSON_THROW_ON_ERROR rather than silently returning false.
         $bad = "\xB1\x31";
         $event = Event::now()
-            ->withOperation('encode-fail')
+            ->withAttribute('span.name', 'encode-fail')
             ->withAttribute('bad', $bad);
 
         $sink->send($event);
