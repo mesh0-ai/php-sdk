@@ -11,6 +11,8 @@ Send logs, custom events, and OTLP traces; query them back with TQL.
 - **PSR-3** logger you can drop into Laravel, Symfony, Slim, …
 - **PSR-18** HTTP client — bring your own (Guzzle, Symfony HTTP, …) or rely on auto-discovery
 - **Built-in retries** for transient failures with exponential backoff + jitter
+- **Nested-span instrumentation** — `Mesh0\Trace\Tracer` for trees of operations (no-code blocks, request handlers, job pipelines)
+- **Low-latency UDP path** — `~5µs/call` via the local mesh0 metrics-agent sidecar
 - **Tested at PHPStan level 9**
 
 ---
@@ -91,6 +93,10 @@ Special context keys are lifted onto first-class event fields:
 
 Everything else is merged into `attributes`. Records are buffered in memory
 and flushed on `flush()`, when the buffer fills, and on shutdown.
+
+If you pass a [`Tracer`](#instrumenting-nested-operations-tracer) to
+`logger(...)`, log records emitted inside an active span pick up
+`trace_id` / `span_id` automatically when you don't supply them yourself.
 
 ### Laravel
 
@@ -232,6 +238,66 @@ transport errors are swallowed — `send()` never throws.
 This path is **at-most-once**: if the local agent is down or the kernel
 drops the datagram, the event is gone. For at-least-once durability, use
 `$mesh0->events->send(...)` which POSTs to `/v1/events` directly.
+
+---
+
+## Instrumenting nested operations (Tracer)
+
+For trees of nested operations — no-code block executions, request → job
+pipelines, anything where a parent's wall-clock includes its children —
+use `Mesh0\Trace\Tracer`. It manages a per-execution `trace_id` and a stack
+of `span_id`s, and emits exactly one event per closed span through any
+`EventSink` (typically the same UDP sink shown above):
+
+```php
+$tracer = $mesh0->tracer(appId: 'no-code-runtime', environment: 'prod');
+
+// Closure form — exception-safe, auto-pop, recommended:
+$result = $tracer->span('block.if', ['block_id' => 'b_123'], function () use ($tracer) {
+    return $tracer->span('block.http_request', ['url' => $url], fn () => $client->get($url));
+});
+
+// Manual form — when a closure doesn't fit (e.g. block dispatchers):
+$h = $tracer->enter('block.loop', ['block_id' => 'b_456']);
+try {
+    // run block...
+    $tracer->exit($h, attributes: ['iterations' => $n]);
+} catch (\Throwable $e) {
+    $tracer->exitWithException($h, $e);
+    throw $e;
+}
+```
+
+Each `enter`/`exit` pair becomes one independent UDP datagram on the way
+out; the metrics-agent forwards them verbatim and ClickHouse reassembles
+the trace via `trace_id` at query time. There is no "session start" or
+"session end" — children always close before parents because the parent's
+frame is still on the stack while children run.
+
+**Long-lived workers (FrankenPHP, RoadRunner, Swoole)** must call
+`$tracer->reset()` between requests so trace state doesn't leak across
+them. A non-empty stack at reset time logs a warning through the PSR-3
+logger you pass to the constructor.
+
+**Adopting an incoming trace** (W3C `traceparent` header):
+
+```php
+$tracer->startTrace($_SERVER['HTTP_TRACEPARENT'] ?? null);
+// First enter() of the request now links to the upstream parent span.
+```
+
+**Logs that auto-correlate to the active span:** pass the tracer when
+building the logger and any record emitted inside a `span()` will pick up
+`trace_id` / `span_id` automatically when not supplied in the PSR-3
+context:
+
+```php
+$logger = $mesh0->logger(appId: 'no-code-runtime', tracer: $tracer);
+
+$tracer->span('block.http_request', [], function () use ($logger) {
+    $logger->info('calling upstream'); // trace_id / span_id stamped automatically
+});
+```
 
 ---
 

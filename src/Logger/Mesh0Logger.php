@@ -7,6 +7,7 @@ namespace Mesh0\Logger;
 use Mesh0\Client;
 use Mesh0\Event\Event;
 use Mesh0\Event\Status;
+use Mesh0\Trace\Tracer;
 use Psr\Log\AbstractLogger;
 use Psr\Log\LogLevel;
 use Stringable;
@@ -65,6 +66,7 @@ final class Mesh0Logger extends AbstractLogger
         private readonly int $bufferSize = 50,
         private readonly array $defaults = [],
         private readonly string $minimumLevel = LogLevel::DEBUG,
+        private readonly ?Tracer $tracer = null,
     ) {
     }
 
@@ -110,6 +112,14 @@ final class Mesh0Logger extends AbstractLogger
         $traceId = self::stringOrNull($context['trace_id'] ?? null);
         $spanId = self::stringOrNull($context['span_id'] ?? null);
         $parentSpanId = self::stringOrNull($context['parent_span_id'] ?? null);
+
+        // Fall back to the active span on the bound Tracer when the caller
+        // didn't supply trace context explicitly. Logs inside a $tracer->span()
+        // closure then auto-correlate without per-call boilerplate.
+        if ($this->tracer !== null) {
+            $traceId ??= $this->tracer->currentTraceId();
+            $spanId ??= $this->tracer->currentSpanId();
+        }
         $userId = self::stringOrNull($context['user_id'] ?? null);
         $sessionId = self::stringOrNull($context['session_id'] ?? null);
         $operation = self::stringOrNull($context['operation'] ?? null) ?? 'log.' . $level;

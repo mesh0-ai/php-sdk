@@ -19,7 +19,7 @@ final class Config
     public const DEFAULT_TIMEOUT = 10.0;
     public const DEFAULT_CONNECT_TIMEOUT = 5.0;
     public const DEFAULT_MAX_RETRIES = 2;
-    public const DEFAULT_USER_AGENT = 'mesh0-php-sdk/0.3.0';
+    public const DEFAULT_USER_AGENT = 'mesh0-php-sdk/0.4.0';
     public const DEFAULT_METRICS_AGENT_HOST = '127.0.0.1';
     public const DEFAULT_METRICS_AGENT_PORT = 8125;
 

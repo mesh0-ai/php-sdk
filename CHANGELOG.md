@@ -4,6 +4,42 @@ All notable changes to `mesh0/sdk` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.4.0 - 2026-05-08
+
+### Added
+- `Mesh0\Trace\Tracer`: nested-span context for instrumenting trees of
+  operations (no-code blocks, request handlers, job pipelines). Manages a
+  per-execution `trace_id` and a stack of `span_id`s; each closed span emits
+  exactly one event via the configured `EventSink` carrying `trace_id`,
+  `span_id`, `parent_span_id`, and `duration_ms`.
+- `Tracer::span($op, $attrs, $fn)` closure form (exception-safe), plus
+  `enter()` / `exit()` / `exitWithException()` for cases where a closure
+  doesn't fit. `reset()` clears state between requests in long-lived workers
+  and warns through PSR-3 if the stack leaked.
+- `Tracer::startTrace($traceparent)` adopts an incoming W3C `traceparent`
+  header so the next root span links to an upstream trace.
+- `Mesh0\Event\EventSink` interface — minimal `send(Event|EventBuilder)`
+  contract that `UdpEventSink` now implements; alternative transports and
+  test stubs plug in here.
+- `Mesh0Logger` accepts an optional `Tracer`. Log records emitted inside an
+  active span auto-stamp `trace_id` / `span_id` from the tracer when the
+  caller did not supply them in the PSR-3 context.
+- `Client::tracer(?appId, ?environment, ?logger)` factory builds a `Tracer`
+  pre-wired to the local UDP event sink. `Client::logger(...)` gains a
+  `?Tracer $tracer` parameter so PSR-3 logs auto-correlate without manually
+  constructing `Mesh0Logger`.
+
+### Notes
+- Spans are independent on the wire — there is no "session start" or
+  "session end" marker. The metrics-agent forwards each datagram verbatim;
+  ClickHouse reassembles the trace via `trace_id` at query time.
+- No changes to `Event`, `EventBuilder`, `UdpEventSink`'s wire format, or
+  any HTTP resource. Adding `EventSink` to `UdpEventSink` is non-breaking.
+- Closing a non-top span (the matching handle is below other open frames)
+  emits the matched span and warns through PSR-3 with the count and
+  operation names of the dropped inner frames, so a missed `exit()` upstream
+  is observable rather than silent data loss.
+
 ## 0.3.0 - 2026-05-08
 
 ### Added
