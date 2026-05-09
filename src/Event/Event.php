@@ -6,6 +6,7 @@ namespace Mesh0\Event;
 
 use DateTimeImmutable;
 use DateTimeInterface;
+use DateTimeZone;
 
 /**
  * A single event ready to send to mesh0's `/v1/events` endpoint.
@@ -57,8 +58,13 @@ final readonly class Event
     public function toArray(): array
     {
         // Server accepts ISO-8601 strings; format with millisecond precision UTC.
+        // Re-zone any input timezone to UTC first — `format('…\\Z')` would
+        // otherwise slap a literal `Z` on a local-time string and ship a
+        // wrong instant.
+        $utc = DateTimeImmutable::createFromInterface($this->timestamp)
+            ->setTimezone(new DateTimeZone('UTC'));
         $out = [
-            'timestamp' => $this->timestamp->format('Y-m-d\\TH:i:s.v\\Z'),
+            'timestamp' => $utc->format('Y-m-d\\TH:i:s.v\\Z'),
         ];
 
         if ($this->eventId !== null) {

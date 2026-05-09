@@ -210,10 +210,28 @@ final class Tracer
         try {
             $result = $fn();
         } catch (Throwable $e) {
-            $this->exitWithException($h, $e);
+            // Don't let a throwing exit() mask the original — the span is
+            // best-effort, the user code's exception is the real story.
+            try {
+                $this->exitWithException($h, $e);
+            } catch (Throwable $exitErr) {
+                $this->logger->error('mesh0 Tracer::exitWithException failed; span event lost', [
+                    'exception' => $exitErr,
+                    'trace_id' => $h->traceId,
+                    'span_id' => $h->spanId,
+                ]);
+            }
             throw $e;
         }
-        $this->exit($h);
+        try {
+            $this->exit($h);
+        } catch (Throwable $exitErr) {
+            $this->logger->error('mesh0 Tracer::exit failed; span event lost', [
+                'exception' => $exitErr,
+                'trace_id' => $h->traceId,
+                'span_id' => $h->spanId,
+            ]);
+        }
         return $result;
     }
 
@@ -272,8 +290,16 @@ final class Tracer
             }
         }
         if (!$found) {
+            // Double-exit, exit on a stale handle from a previous request, or
+            // exit on a handle from a different Tracer instance. The span event
+            // is dropped — make the misuse traceable so the pattern is visible
+            // in long-lived workers.
             $this->logger->warning('mesh0 Tracer::exit called with unknown span; ignoring', [
                 'span_id' => $handle->spanId,
+                'trace_id' => $handle->traceId,
+                'operation' => $handle->operation,
+                'started_at' => $handle->startedAt->format('Y-m-d\\TH:i:s.v\\Z'),
+                'duration_ms' => (\hrtime(true) - $handle->startedHrTimeNs) / 1_000_000.0,
             ]);
             return;
         }
@@ -295,7 +321,19 @@ final class Tracer
             ->withStatus($status)
             ->withAttributes($attributes);
 
-        $this->sink->send($builder);
+        try {
+            $this->sink->send($builder);
+        } catch (Throwable $e) {
+            // The stack invariant is the load-bearing thing — once we've popped
+            // the handle, we cannot let a sink failure unwind out of finish()
+            // and corrupt outer spans. Surface the loss instead.
+            $this->logger->error('mesh0 Tracer sink send failed; span event lost', [
+                'exception' => $e,
+                'trace_id' => $handle->traceId,
+                'span_id' => $handle->spanId,
+                'operation' => $handle->operation,
+            ]);
+        }
     }
 
     private static function generateTraceId(): string

@@ -108,6 +108,17 @@ If you pass a [`Tracer`](#instrumenting-nested-operations-tracer) to
 `logger(...)`, log records emitted inside an active span pick up
 `trace_id` / `span_id` automatically when you don't supply them yourself.
 
+The logger never throws — delivery failures are swallowed so your
+request path stays alive. Pass an optional `fallback` PSR-3 logger if
+you want visibility into why telemetry vanished:
+
+```php
+$logger = $mesh0->logger(
+    defaults: ['app.id' => 'web'],
+    fallback: $appLogger, // receives flush errors + malformed-input warnings
+);
+```
+
 ### Laravel
 
 ```php
@@ -351,15 +362,16 @@ $tracer->span('block.http_request', [], function () use ($logger) {
 ## Querying
 
 ```php
-// Only `timestamp, duration_ms, project.id, status, trace.id, span.id,
-// parent_span.id` are TQL builtins. Anything else (e.g. span.name) must
-// be exposed via a per-project alias or promoted column — set those up
-// in the dashboard, then reference them by their alias name here.
+// Only `timestamp, duration_ms, project_id, status, trace_id, span_id,
+// parent_span_id` are TQL builtins. Anything else (e.g. `span.name` or
+// other `attributes` keys) must be exposed via a per-project alias or
+// promoted column — set those up in the dashboard, then reference them
+// by their alias name here.
 $rows = $mesh0->query->run([
     'from'    => 'events',
-    'select'  => ['span_name', 'count()'],
+    'select'  => ['status', 'count()'],
     'where'   => ['status' => 'error'],
-    'groupBy' => ['span_name'],
+    'groupBy' => ['status'],
     'orderBy' => [['count()', 'desc']],
     'limit'   => 25,
 ]);
