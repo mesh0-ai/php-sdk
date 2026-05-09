@@ -19,7 +19,7 @@ final class Config
     public const DEFAULT_TIMEOUT = 10.0;
     public const DEFAULT_CONNECT_TIMEOUT = 5.0;
     public const DEFAULT_MAX_RETRIES = 2;
-    public const DEFAULT_USER_AGENT = 'mesh0-php-sdk/0.4.0';
+    public const DEFAULT_USER_AGENT = 'mesh0-php-sdk/0.5.0';
     public const DEFAULT_METRICS_AGENT_HOST = '127.0.0.1';
     public const DEFAULT_METRICS_AGENT_PORT = 8125;
 
@@ -27,15 +27,18 @@ final class Config
     public readonly array $defaultHeaders;
 
     /**
-     * @param string                $apiKey         API key in the form `m0_<routing>_<secret>`.
-     * @param string                $baseUrl        API base URL, no trailing slash.
-     * @param float                 $timeout        Total request timeout, seconds.
-     * @param float                 $connectTimeout Connect timeout, seconds.
-     * @param int                   $maxRetries     Retries for idempotent failures (network / 5xx / 429).
-     * @param string                $userAgent      User-Agent header value.
-     * @param array<string, string> $defaultHeaders Extra headers added to every request.
-     * @param string                $metricsAgentHost Host of the local metrics-agent (UDP target for metrics + events).
-     * @param int                   $metricsAgentPort Port of the local metrics-agent (single port for both metrics and events).
+     * @param string                $apiKey                 API key in the form `m0_<routing>_<secret>`.
+     * @param string                $baseUrl                API base URL, no trailing slash.
+     * @param float                 $timeout                Total request timeout, seconds.
+     * @param float                 $connectTimeout         Connect timeout, seconds.
+     * @param int                   $maxRetries             Retries for idempotent failures (network / 5xx / 429).
+     * @param string                $userAgent              User-Agent header value.
+     * @param array<string, string> $defaultHeaders         Extra headers added to every request.
+     * @param string                $metricsAgentHost       Host of the local metrics-agent (UDP target for metrics + events).
+     * @param int                   $metricsAgentPort       Port of the local metrics-agent (single port for both metrics and events).
+     * @param string|null           $metricsAgentSocketPath Optional Unix-domain socket path. When set, sinks open
+     *                                                      `udg://<path>` (UDS-DGRAM) instead of `udp://host:port`,
+     *                                                      and `metricsAgentHost`/`metricsAgentPort` are ignored.
      */
     public function __construct(
         public readonly string $apiKey,
@@ -47,6 +50,7 @@ final class Config
         array $defaultHeaders = [],
         public readonly string $metricsAgentHost = self::DEFAULT_METRICS_AGENT_HOST,
         public readonly int $metricsAgentPort = self::DEFAULT_METRICS_AGENT_PORT,
+        public readonly ?string $metricsAgentSocketPath = null,
     ) {
         if ($apiKey === '') {
             throw new ConfigurationException('apiKey must not be empty');
@@ -72,6 +76,24 @@ final class Config
         if ($metricsAgentPort < 1 || $metricsAgentPort > 65535) {
             throw new ConfigurationException('metricsAgentPort must be in 1..65535');
         }
+        if ($metricsAgentSocketPath !== null) {
+            if ($metricsAgentSocketPath === '') {
+                throw new ConfigurationException('metricsAgentSocketPath must not be empty when set');
+            }
+            if ($metricsAgentSocketPath[0] !== '/') {
+                // UDS paths are interpreted relative to the agent's cwd if
+                // not absolute, which is rarely what callers want and
+                // fragile across deployments.
+                throw new ConfigurationException('metricsAgentSocketPath must be an absolute filesystem path');
+            }
+            // sun_path is 104 bytes on macOS/BSD and 108 on Linux. Reject at
+            // the smaller bound so the same config works across platforms;
+            // longer paths fail at stream_socket_client() with an opaque
+            // EINVAL and the open-failure latch then disables the sink.
+            if (\strlen($metricsAgentSocketPath) > 104) {
+                throw new ConfigurationException('metricsAgentSocketPath exceeds 104 bytes (sun_path limit)');
+            }
+        }
 
         $this->defaultHeaders = $defaultHeaders;
     }
@@ -90,6 +112,7 @@ final class Config
         $base = getenv('MESH0_BASE_URL');
         $agentHost = getenv('MESH0_AGENT_HOST');
         $agentPort = getenv('MESH0_AGENT_PORT');
+        $agentSocket = getenv('MESH0_AGENT_SOCKET');
 
         $port = self::DEFAULT_METRICS_AGENT_PORT;
         if ($agentPort !== false && $agentPort !== '') {
@@ -106,6 +129,7 @@ final class Config
                 ? self::DEFAULT_METRICS_AGENT_HOST
                 : $agentHost,
             metricsAgentPort: $port,
+            metricsAgentSocketPath: ($agentSocket === false || $agentSocket === '') ? null : $agentSocket,
         );
     }
 }

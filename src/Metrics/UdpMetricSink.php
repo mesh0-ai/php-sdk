@@ -8,7 +8,14 @@ use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 
 /**
- * UDP `MetricSink` targeting a co-located mesh0 metrics-agent.
+ * Datagram `MetricSink` targeting a co-located mesh0 metrics-agent.
+ *
+ * Speaks one of two transports, both fire-and-forget:
+ *
+ * - **UDP** (default): `host:port`, addresses the agent's UDP listener.
+ * - **UDS-DGRAM**: pass `socketPath` to open `udg://<path>` against the
+ *   agent's Unix-domain datagram socket. Lifts the ~64 KB UDP fragmentation
+ *   ceiling and avoids the IP stack entirely on a single host.
  *
  * The socket is opened lazily on the first `send()` so constructing a sink
  * (and therefore a `Mesh0\Client`) performs zero I/O. Send errors are
@@ -16,6 +23,9 @@ use Psr\Log\NullLogger;
  * path never has to care whether telemetry made it. An optional PSR-3 logger
  * receives a single `warning` per state transition (open failure / write
  * failure) so missing telemetry is at least observable.
+ *
+ * The class name is preserved for backward compatibility — UDS-DGRAM is just
+ * a different concrete transport for the same "local agent sink" role.
  */
 final class UdpMetricSink implements MetricSink
 {
@@ -33,6 +43,7 @@ final class UdpMetricSink implements MetricSink
         private readonly string $host = self::DEFAULT_HOST,
         private readonly int $port = self::DEFAULT_PORT,
         ?LoggerInterface $logger = null,
+        private readonly ?string $socketPath = null,
     ) {
         $this->logger = $logger ?? new NullLogger();
     }
@@ -55,10 +66,7 @@ final class UdpMetricSink implements MetricSink
             $written = false;
         }
         if ($written === false || $written === 0) {
-            $this->logger->warning('mesh0 metrics-agent UDP write failed; dropping subsequent packets until reset', [
-                'host' => $this->host,
-                'port' => $this->port,
-            ]);
+            $this->logger->warning('mesh0 metrics-agent write failed; dropping subsequent packets until reset', $this->endpointContext());
             $this->resetSocket();
         }
     }
@@ -91,7 +99,7 @@ final class UdpMetricSink implements MetricSink
         $errno = 0;
         $errstr = '';
         $sock = @stream_socket_client(
-            "udp://{$this->host}:{$this->port}",
+            $this->endpointUri(),
             $errno,
             $errstr,
             1.0,
@@ -99,18 +107,33 @@ final class UdpMetricSink implements MetricSink
         );
         if ($sock === false) {
             $this->failedToOpen = true;
-            $this->logger->warning('mesh0 metrics-agent UDP socket open failed; metrics disabled for this sink', [
-                'host' => $this->host,
-                'port' => $this->port,
-                'errno' => $errno,
-                'errstr' => $errstr,
-            ]);
+            $this->logger->warning(
+                'mesh0 metrics-agent socket open failed; metrics disabled for this sink',
+                $this->endpointContext() + ['errno' => $errno, 'errstr' => $errstr],
+            );
             return null;
         }
-        // Non-blocking writes — UDP send shouldn't ever block, but defend
-        // against a misbehaving local agent socket buffer regardless.
+        // Non-blocking writes — datagram sends shouldn't ever block, but
+        // defend against a misbehaving local agent socket buffer regardless.
         stream_set_blocking($sock, false);
         $this->socket = $sock;
         return $sock;
+    }
+
+    private function endpointUri(): string
+    {
+        if ($this->socketPath !== null) {
+            return "udg://{$this->socketPath}";
+        }
+        return "udp://{$this->host}:{$this->port}";
+    }
+
+    /** @return array<string, string|int> */
+    private function endpointContext(): array
+    {
+        if ($this->socketPath !== null) {
+            return ['transport' => 'udg', 'path' => $this->socketPath];
+        }
+        return ['transport' => 'udp', 'host' => $this->host, 'port' => $this->port];
     }
 }

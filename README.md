@@ -190,7 +190,7 @@ $metrics->histogram('upload.bytes', 8192);
 $rows = $metrics->time('db.select_ms', fn () => $pdo->query($sql)->fetchAll());
 ```
 
-The UDP socket is opened lazily on the first send, so `$mesh0->metrics()` does
+The socket is opened lazily on the first send, so `$mesh0->metrics()` does
 no I/O. Override the agent address via `Config` (or `MESH0_AGENT_HOST` /
 `MESH0_AGENT_PORT`):
 
@@ -201,10 +201,41 @@ $metrics = $mesh0->metrics(host: 'mesh0-agent', port: 9125, defaultTags: [
 ]);
 ```
 
-UDP send failures (peer unreachable, agent not running) are swallowed — the
-request path never throws on transport. Pass an optional PSR-3 logger to
-`new UdpMetricSink(host, port, logger)` to surface a single warning per state
-transition. Malformed metric names or tags do throw `ConfigurationException`
+### Unix-domain socket transport (UDS-DGRAM)
+
+When the SDK and the agent share a host (the typical sidecar layout), a
+Unix datagram socket is a strictly better local wire than UDP loopback:
+no IP fragmentation ceiling, no port to coordinate, lossless on a healthy
+host. Set `MESH0_AGENT_SOCKET` (or `Config::$metricsAgentSocketPath`) to
+the agent's bind path and the sinks open `udg://<path>` instead of
+`udp://host:port`:
+
+```sh
+export MESH0_AGENT_SOCKET=/run/mesh0/agent.sock
+```
+
+```php
+// Both metrics and events automatically pick up the socket path.
+$metrics = $mesh0->metrics();
+$udp     = $mesh0->events->udp();
+
+// Or per-call:
+$metrics = $mesh0->metrics(socketPath: '/run/mesh0/agent.sock');
+```
+
+The agent must be configured with a matching `MESH0_LISTEN_ADDR`
+(`unix:///run/mesh0/agent.sock`). When `socketPath` is set, the host /
+port options are ignored.
+
+### Failure semantics
+
+Datagram send failures (peer unreachable, agent not running) are
+swallowed — the request path never throws on transport. Pass an optional
+PSR-3 logger via `new UdpMetricSink(logger: $log)` to surface a single
+warning per state transition (open failure, write failure, oversize drop).
+Note: the open-failure latch is terminal for the lifetime of the sink —
+long-lived workers that need to recover from a transient agent restart
+should construct a fresh sink rather than rely on auto-reopen. Malformed metric names or tags do throw `ConfigurationException`
 so programmer errors fail loudly in development rather than silently
 disappearing. `sampleRate` outside `(0, 1]` is clamped (≤0 drops, ≥1 always
 emits) rather than throwing.
@@ -351,6 +382,7 @@ $mesh0 = new Client(new Config(
 | `MESH0_BASE_URL`    | Override base URL (self-hosted deployments).      |
 | `MESH0_AGENT_HOST`  | metrics-agent host (default `127.0.0.1`).         |
 | `MESH0_AGENT_PORT`  | metrics-agent UDP port (default `8125`).          |
+| `MESH0_AGENT_SOCKET`| Unix-domain socket path. When set, the SDK opens `udg://<path>` and ignores host/port. |
 
 ### Custom HTTP client
 
