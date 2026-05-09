@@ -46,7 +46,10 @@ final class Events
      * The default `socketPath` is read from {@see Config::$agentSocketPath}
      * (env `MESH0_AGENT_SOCKET`); if neither is set this method throws.
      *
-     * @throws ConfigurationException when neither `socketPath` nor `Config::$agentSocketPath` is set.
+     * @throws ConfigurationException when the resolved socket path is missing
+     *         (neither `socketPath` nor `Config::$agentSocketPath` is set), or
+     *         is invalid (non-absolute, or longer than the 104-byte sun_path
+     *         floor).
      */
     public function agent(
         ?string $socketPath = null,

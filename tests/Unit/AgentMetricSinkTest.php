@@ -81,6 +81,22 @@ final class AgentMetricSinkTest extends TestCase
         $this->assertStringContainsString('open failed', $warnings[0]['message']);
     }
 
+    public function testOversizePacketIsDroppedWithSingleWarning(): void
+    {
+        $logger = new RecordingLogger();
+        $sink = new AgentMetricSink($this->sockPath, $logger);
+
+        $huge = str_repeat('x', AgentMetricSink::MAX_DATAGRAM_BYTES + 1);
+
+        $sink->send($huge);
+        $sink->send($huge);
+
+        $this->assertNull($this->receiveOnePacket(50));
+        $warnings = $logger->recordsAt('warning');
+        $this->assertCount(1, $warnings, 'oversize warning should latch after first drop');
+        $this->assertStringContainsString('exceeds 32KB', $warnings[0]['message']);
+    }
+
     public function testRejectsRelativeSocketPath(): void
     {
         $this->expectException(ConfigurationException::class);

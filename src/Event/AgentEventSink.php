@@ -42,6 +42,10 @@ final class AgentEventSink implements EventSink
 
     private bool $oversizeWarned = false;
 
+    private bool $encodeWarned = false;
+
+    private bool $writeFailureWarned = false;
+
     private readonly LoggerInterface $logger;
 
     public function __construct(
@@ -66,8 +70,19 @@ final class AgentEventSink implements EventSink
     {
         $e = $event instanceof EventBuilder ? $event->build() : $event;
 
-        $payload = \json_encode($e->toArray(), \JSON_UNESCAPED_SLASHES | \JSON_UNESCAPED_UNICODE);
-        if (!\is_string($payload)) {
+        try {
+            $payload = \json_encode(
+                $e->toArray(),
+                \JSON_UNESCAPED_SLASHES | \JSON_UNESCAPED_UNICODE | \JSON_THROW_ON_ERROR,
+            );
+        } catch (\JsonException $ex) {
+            if (!$this->encodeWarned) {
+                $this->encodeWarned = true;
+                $this->logger->warning('mesh0 event json_encode failed; dropping', [
+                    'error' => $ex->getMessage(),
+                    'event_id' => $e->eventId,
+                ]);
+            }
             return;
         }
 
@@ -87,18 +102,23 @@ final class AgentEventSink implements EventSink
             return;
         }
 
-        try {
-            $written = @\fwrite($sock, $payload);
-        } catch (\Throwable) {
-            $written = false;
-        }
+        $written = @\fwrite($sock, $payload);
         if ($written === false || $written === 0) {
-            $this->logger->warning(
-                'mesh0 event write failed; dropping subsequent packets until reset',
-                ['path' => $this->socketPath],
-            );
-            $this->resetSocket();
+            // Drop and warn once. We deliberately do NOT close/reopen the
+            // socket here — for UDS-DGRAM, EAGAIN (buffer full) and
+            // ECONNREFUSED (peer gone) are both recoverable without a
+            // reconnect, and tearing down on every failure produced a
+            // reconnect-per-packet storm under load.
+            if (!$this->writeFailureWarned) {
+                $this->writeFailureWarned = true;
+                $this->logger->warning(
+                    'mesh0 event write failed; dropping packets',
+                    ['path' => $this->socketPath, 'error' => (\error_get_last() ?? ['message' => 'unknown'])['message']],
+                );
+            }
+            return;
         }
+        $this->writeFailureWarned = false;
     }
 
     /**
@@ -119,6 +139,8 @@ final class AgentEventSink implements EventSink
         $this->resetSocket();
         $this->failedToOpen = false;
         $this->oversizeWarned = false;
+        $this->encodeWarned = false;
+        $this->writeFailureWarned = false;
     }
 
     private function resetSocket(): void

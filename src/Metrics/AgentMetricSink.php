@@ -27,10 +27,21 @@ use Psr\Log\NullLogger;
  */
 final class AgentMetricSink implements MetricSink
 {
+    /**
+     * Per-datagram size ceiling. Larger packets are dropped before the
+     * kernel rejects them with EMSGSIZE (which would otherwise look like
+     * a generic write failure). Mirrors {@see \Mesh0\Event\AgentEventSink::MAX_DATAGRAM_BYTES}.
+     */
+    public const MAX_DATAGRAM_BYTES = 32_768;
+
     /** @var resource|null */
     private $socket = null;
 
     private bool $failedToOpen = false;
+
+    private bool $oversizeWarned = false;
+
+    private bool $writeFailureWarned = false;
 
     private readonly LoggerInterface $logger;
 
@@ -54,28 +65,45 @@ final class AgentMetricSink implements MetricSink
         if ($packet === '') {
             return;
         }
+        if (\strlen($packet) > self::MAX_DATAGRAM_BYTES) {
+            if (!$this->oversizeWarned) {
+                $this->oversizeWarned = true;
+                $this->logger->warning('mesh0 metrics packet exceeds 32KB; dropping', [
+                    'bytes' => \strlen($packet),
+                    'limit' => self::MAX_DATAGRAM_BYTES,
+                ]);
+            }
+            return;
+        }
         $sock = $this->socket();
         if ($sock === null) {
             return;
         }
-        try {
-            $written = @\fwrite($sock, $packet);
-        } catch (\Throwable) {
-            $written = false;
-        }
+        $written = @\fwrite($sock, $packet);
         if ($written === false || $written === 0) {
-            $this->logger->warning(
-                'mesh0 metrics-agent write failed; dropping subsequent packets until reset',
-                ['path' => $this->socketPath],
-            );
-            $this->resetSocket();
+            // Drop and warn once. We deliberately do NOT close/reopen the
+            // socket — for UDS-DGRAM, EAGAIN (buffer full) and
+            // ECONNREFUSED (peer gone) are recoverable without a
+            // reconnect, and tearing down on every failure produced a
+            // reconnect-per-packet storm under load.
+            if (!$this->writeFailureWarned) {
+                $this->writeFailureWarned = true;
+                $this->logger->warning(
+                    'mesh0 metrics-agent write failed; dropping packets',
+                    ['path' => $this->socketPath, 'error' => (\error_get_last() ?? ['message' => 'unknown'])['message']],
+                );
+            }
+            return;
         }
+        $this->writeFailureWarned = false;
     }
 
     public function close(): void
     {
         $this->resetSocket();
         $this->failedToOpen = false;
+        $this->oversizeWarned = false;
+        $this->writeFailureWarned = false;
     }
 
     private function resetSocket(): void

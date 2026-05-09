@@ -80,6 +80,46 @@ final class AgentEventSinkTest extends TestCase
         $this->assertStringContainsString('open failed', $warnings[0]['message']);
     }
 
+    public function testOversizePayloadIsDroppedWithSingleWarning(): void
+    {
+        $logger = new RecordingLogger();
+        $sink = new AgentEventSink($this->sockPath, $logger);
+
+        $huge = str_repeat('x', AgentEventSink::MAX_DATAGRAM_BYTES);
+        $event = Event::now()
+            ->withOperation('big')
+            ->withAttribute('blob', $huge);
+
+        $sink->send($event);
+        $sink->send($event);
+
+        $this->assertNull($this->receiveOnePacket(50));
+        $warnings = $logger->recordsAt('warning');
+        $this->assertCount(1, $warnings, 'oversize warning should latch after first drop');
+        $this->assertStringContainsString('exceeds 32KB', $warnings[0]['message']);
+    }
+
+    public function testJsonEncodeFailureIsDroppedWithSingleWarning(): void
+    {
+        $logger = new RecordingLogger();
+        $sink = new AgentEventSink($this->sockPath, $logger);
+
+        // Invalid UTF-8 byte — json_encode throws JsonException with
+        // JSON_THROW_ON_ERROR rather than silently returning false.
+        $bad = "\xB1\x31";
+        $event = Event::now()
+            ->withOperation('encode-fail')
+            ->withAttribute('bad', $bad);
+
+        $sink->send($event);
+        $sink->send($event);
+
+        $this->assertNull($this->receiveOnePacket(50));
+        $warnings = $logger->recordsAt('warning');
+        $this->assertCount(1, $warnings, 'encode warning should latch after first drop');
+        $this->assertStringContainsString('json_encode', $warnings[0]['message']);
+    }
+
     public function testRejectsRelativeSocketPath(): void
     {
         $this->expectException(ConfigurationException::class);

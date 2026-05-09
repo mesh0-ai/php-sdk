@@ -61,6 +61,8 @@ final class Metrics
      * metrics-agent's Unix datagram socket.
      *
      * @param array<string, string|int|float> $defaultTags
+     * @throws ConfigurationException when `$socketPath` is not absolute or
+     *         exceeds the 104-byte sun_path floor.
      */
     public static function agent(string $socketPath, array $defaultTags = []): self
     {

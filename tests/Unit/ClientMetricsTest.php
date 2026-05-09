@@ -88,6 +88,15 @@ final class ClientMetricsTest extends TestCase
         $client->metrics();
     }
 
+    public function testEventsAgentThrowsWhenAgentSocketPathMissing(): void
+    {
+        $client = $this->client(agentSocketPath: null);
+
+        $this->expectException(ConfigurationException::class);
+        $this->expectExceptionMessageMatches('/MESH0_AGENT_SOCKET/');
+        $client->events()->agent();
+    }
+
     public function testMetricsAllowsCustomSinkWithoutAgentSocketPath(): void
     {
         $client = $this->client(agentSocketPath: null);
