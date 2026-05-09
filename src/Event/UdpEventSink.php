@@ -8,7 +8,7 @@ use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 
 /**
- * UDP event sink targeting a co-located mesh0 metrics-agent.
+ * Datagram event sink targeting a co-located mesh0 metrics-agent.
  *
  * Each event is encoded as a single JSON datagram and sent to the agent,
  * which batches and forwards them to `/v1/events` over HTTPS. This trades
@@ -16,11 +16,21 @@ use Psr\Log\NullLogger;
  * processes (PHP request handlers, CLI workers) where an HTTPS roundtrip
  * per event is unaffordable.
  *
+ * Speaks one of two transports, both fire-and-forget:
+ *
+ * - **UDP** (default): `host:port`, addresses the agent's UDP listener.
+ * - **UDS-DGRAM**: pass `socketPath` to open `udg://<path>` against the
+ *   agent's Unix-domain datagram socket. Lifts the ~64 KB UDP fragmentation
+ *   ceiling and avoids the IP stack entirely on a single host.
+ *
  * The socket is opened lazily on the first `send()` so constructing a sink
- * performs zero I/O. Send errors are intentionally swallowed (UDP is at-most-
- * once); an optional PSR-3 logger receives a single `warning` per state
- * transition (open failure / write failure / oversize drop) so missing
+ * performs zero I/O. Send errors are intentionally swallowed (datagrams are
+ * at-most-once); an optional PSR-3 logger receives a single `warning` per
+ * state transition (open failure / write failure / oversize drop) so missing
  * telemetry is at least observable.
+ *
+ * The class name is preserved for backward compatibility — UDS-DGRAM is just
+ * a different concrete transport for the same "local agent sink" role.
  */
 final class UdpEventSink implements EventSink
 {
@@ -28,9 +38,10 @@ final class UdpEventSink implements EventSink
     public const DEFAULT_PORT = 8125;
 
     /**
-     * Maximum size of a single UDP datagram. Anything larger risks IP
-     * fragmentation or being silently dropped by the kernel; we drop with a
-     * single warning rather than crash the request path.
+     * Maximum size of a single datagram. Anything larger risks IP
+     * fragmentation (UDP) or being silently dropped by the kernel; we drop
+     * with a single warning rather than crash the request path. The agent
+     * enforces the same 32 KB ceiling server-side regardless of transport.
      */
     public const MAX_DATAGRAM_BYTES = 32_768;
 
@@ -47,6 +58,7 @@ final class UdpEventSink implements EventSink
         private readonly string $host = self::DEFAULT_HOST,
         private readonly int $port = self::DEFAULT_PORT,
         ?LoggerInterface $logger = null,
+        private readonly ?string $socketPath = null,
     ) {
         $this->logger = $logger ?? new NullLogger();
     }
@@ -68,7 +80,7 @@ final class UdpEventSink implements EventSink
         if (\strlen($payload) > self::MAX_DATAGRAM_BYTES) {
             if (!$this->oversizeWarned) {
                 $this->oversizeWarned = true;
-                $this->logger->warning('mesh0 event UDP datagram exceeds 32KB; dropping', [
+                $this->logger->warning('mesh0 event datagram exceeds 32KB; dropping', [
                     'bytes' => \strlen($payload),
                     'limit' => self::MAX_DATAGRAM_BYTES,
                 ]);
@@ -90,10 +102,7 @@ final class UdpEventSink implements EventSink
             $written = false;
         }
         if ($written === false || $written === 0) {
-            $this->logger->warning('mesh0 event UDP write failed; dropping subsequent packets until reset', [
-                'host' => $this->host,
-                'port' => $this->port,
-            ]);
+            $this->logger->warning('mesh0 event write failed; dropping subsequent packets until reset', $this->endpointContext());
             $this->resetSocket();
         }
     }
@@ -140,7 +149,7 @@ final class UdpEventSink implements EventSink
         $errno = 0;
         $errstr = '';
         $sock = @\stream_socket_client(
-            "udp://{$this->host}:{$this->port}",
+            $this->endpointUri(),
             $errno,
             $errstr,
             1.0,
@@ -148,18 +157,33 @@ final class UdpEventSink implements EventSink
         );
         if ($sock === false) {
             $this->failedToOpen = true;
-            $this->logger->warning('mesh0 event UDP socket open failed; events disabled for this sink', [
-                'host' => $this->host,
-                'port' => $this->port,
-                'errno' => $errno,
-                'errstr' => $errstr,
-            ]);
+            $this->logger->warning(
+                'mesh0 event socket open failed; events disabled for this sink',
+                $this->endpointContext() + ['errno' => $errno, 'errstr' => $errstr],
+            );
             return null;
         }
-        // Non-blocking writes — UDP send shouldn't ever block, but defend
-        // against a misbehaving local agent socket buffer regardless.
+        // Non-blocking writes — datagram sends shouldn't ever block, but
+        // defend against a misbehaving local agent socket buffer regardless.
         \stream_set_blocking($sock, false);
         $this->socket = $sock;
         return $sock;
+    }
+
+    private function endpointUri(): string
+    {
+        if ($this->socketPath !== null) {
+            return "udg://{$this->socketPath}";
+        }
+        return "udp://{$this->host}:{$this->port}";
+    }
+
+    /** @return array<string, string|int> */
+    private function endpointContext(): array
+    {
+        if ($this->socketPath !== null) {
+            return ['transport' => 'udg', 'path' => $this->socketPath];
+        }
+        return ['transport' => 'udp', 'host' => $this->host, 'port' => $this->port];
     }
 }

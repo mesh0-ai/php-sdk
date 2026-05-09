@@ -4,6 +4,25 @@ All notable changes to `mesh0/sdk` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.5.0 - 2026-05-08
+
+### Added
+- `Config::$metricsAgentSocketPath` (and `MESH0_AGENT_SOCKET` env var):
+  optional Unix-domain socket path. When set, both `UdpMetricSink` and
+  `UdpEventSink` open `udg://<path>` (UDS-DGRAM) against the local
+  metrics-agent instead of `udp://host:port`. Lifts the ~64 KB UDP
+  fragmentation ceiling and avoids the IP stack on a single host.
+- New constructor parameter `?string $socketPath` on `UdpMetricSink` and
+  `UdpEventSink`. When set, takes precedence over `host` / `port`.
+- `Client::metrics(... ?string $socketPath = null)` and
+  `Events::udp(... ?string $socketPath = null)` accept per-call overrides.
+
+### Notes
+- Pair with metrics-agent `>= 0.3.0` and `MESH0_LISTEN_ADDR=unix:///path`.
+- Class names (`UdpMetricSink`, `UdpEventSink`) are unchanged for backward
+  compatibility — UDS-DGRAM is just a different concrete transport for
+  the same "local agent sink" role.
+
 ## 0.4.0 - 2026-05-08
 
 ### Added

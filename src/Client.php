@@ -118,17 +118,22 @@ final class Client
         ?int $port = null,
         array $defaultTags = [],
         ?MetricSink $sink = null,
+        ?string $socketPath = null,
     ): Metrics {
-        if ($sink !== null || $host !== null || $port !== null || $defaultTags !== []) {
+        if ($sink !== null || $host !== null || $port !== null || $defaultTags !== [] || $socketPath !== null) {
             $effectiveSink = $sink ?? new UdpMetricSink(
                 $host ?? $this->config->metricsAgentHost,
                 $port ?? $this->config->metricsAgentPort,
+                null,
+                $socketPath ?? $this->config->metricsAgentSocketPath,
             );
             return new Metrics($effectiveSink, $defaultTags);
         }
         return $this->metrics ??= new Metrics(new UdpMetricSink(
             $this->config->metricsAgentHost,
             $this->config->metricsAgentPort,
+            null,
+            $this->config->metricsAgentSocketPath,
         ));
     }
 

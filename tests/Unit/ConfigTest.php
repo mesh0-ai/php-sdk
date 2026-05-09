@@ -97,8 +97,43 @@ final class ConfigTest extends TestCase
             $c = Config::fromEnv();
             $this->assertSame(Config::DEFAULT_METRICS_AGENT_HOST, $c->metricsAgentHost);
             $this->assertSame(Config::DEFAULT_METRICS_AGENT_PORT, $c->metricsAgentPort);
+            $this->assertNull($c->metricsAgentSocketPath);
         } finally {
             \putenv('MESH0_API_KEY');
+        }
+    }
+
+    public function testRejectsEmptyMetricsAgentSocketPath(): void
+    {
+        $this->expectException(ConfigurationException::class);
+        new Config(apiKey: 'm0_abcde_aaaaaaaaaaaaaaaaaaaaaaaa', metricsAgentSocketPath: '');
+    }
+
+    public function testRejectsRelativeMetricsAgentSocketPath(): void
+    {
+        $this->expectException(ConfigurationException::class);
+        new Config(apiKey: 'm0_abcde_aaaaaaaaaaaaaaaaaaaaaaaa', metricsAgentSocketPath: 'relative/path.sock');
+    }
+
+    public function testAcceptsAbsoluteMetricsAgentSocketPath(): void
+    {
+        $c = new Config(
+            apiKey: 'm0_abcde_aaaaaaaaaaaaaaaaaaaaaaaa',
+            metricsAgentSocketPath: '/run/mesh0/agent.sock',
+        );
+        $this->assertSame('/run/mesh0/agent.sock', $c->metricsAgentSocketPath);
+    }
+
+    public function testFromEnvReadsAgentSocket(): void
+    {
+        \putenv('MESH0_API_KEY=m0_abcde_aaaaaaaaaaaaaaaaaaaaaaaa');
+        \putenv('MESH0_AGENT_SOCKET=/run/mesh0/agent.sock');
+        try {
+            $c = Config::fromEnv();
+            $this->assertSame('/run/mesh0/agent.sock', $c->metricsAgentSocketPath);
+        } finally {
+            \putenv('MESH0_API_KEY');
+            \putenv('MESH0_AGENT_SOCKET');
         }
     }
 }

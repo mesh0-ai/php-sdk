@@ -46,20 +46,26 @@ final class Events
      * {@see Config::$metricsAgentPort} (the agent listens on the same port
      * for both metrics and events).
      */
-    public function udp(?string $host = null, ?int $port = null, ?LoggerInterface $logger = null): UdpEventSink
-    {
+    public function udp(
+        ?string $host = null,
+        ?int $port = null,
+        ?LoggerInterface $logger = null,
+        ?string $socketPath = null,
+    ): UdpEventSink {
         $defaultHost = $this->config?->metricsAgentHost ?? UdpEventSink::DEFAULT_HOST;
         $defaultPort = $this->config?->metricsAgentPort ?? UdpEventSink::DEFAULT_PORT;
+        $defaultSocket = $this->config?->metricsAgentSocketPath;
 
-        if ($host !== null || $port !== null || $logger !== null) {
+        if ($host !== null || $port !== null || $logger !== null || $socketPath !== null) {
             return new UdpEventSink(
                 $host ?? $defaultHost,
                 $port ?? $defaultPort,
                 $logger,
+                $socketPath ?? $defaultSocket,
             );
         }
 
-        return $this->udpSink ??= new UdpEventSink($defaultHost, $defaultPort);
+        return $this->udpSink ??= new UdpEventSink($defaultHost, $defaultPort, null, $defaultSocket);
     }
 
     /**
