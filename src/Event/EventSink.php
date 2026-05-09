@@ -7,9 +7,10 @@ namespace Mesh0\Event;
 /**
  * Anything that accepts a finished {@see Event} and ships it onward.
  *
- * The default implementation is {@see UdpEventSink}, which fires a single
- * datagram to the local mesh0 metrics-agent. Tests and alternative transports
- * (in-memory queues, file spools) implement this interface.
+ * The default implementation is {@see AgentEventSink}, which fires a
+ * single UDS-DGRAM datagram to the local mesh0 metrics-agent. Tests and
+ * alternative transports (in-memory queues, file spools) implement this
+ * interface.
  */
 interface EventSink
 {

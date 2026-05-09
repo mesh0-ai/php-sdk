@@ -4,15 +4,13 @@ declare(strict_types=1);
 
 namespace Mesh0\Tests\Unit;
 
+use Mesh0\Event\AgentEventSink;
 use Mesh0\Event\Event;
-use Mesh0\Event\UdpEventSink;
+use Mesh0\Exception\ConfigurationException;
 use Mesh0\Tests\Support\RecordingLogger;
 use PHPUnit\Framework\TestCase;
 
-/**
- * Round-trip coverage for UdpEventSink in UDS-DGRAM mode (`socketPath` set).
- */
-final class UdsEventSinkTest extends TestCase
+final class AgentEventSinkTest extends TestCase
 {
     /** @var resource|null */
     private $server = null;
@@ -22,7 +20,7 @@ final class UdsEventSinkTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->sockPath = '/tmp/mesh0-uds-event-' . bin2hex(random_bytes(4)) . '.sock';
+        $this->sockPath = '/tmp/mesh0-agent-event-' . bin2hex(random_bytes(4)) . '.sock';
 
         $errno = 0;
         $errstr = '';
@@ -46,9 +44,9 @@ final class UdsEventSinkTest extends TestCase
         parent::tearDown();
     }
 
-    public function testSendDeliversJsonOverUds(): void
+    public function testSendDeliversJson(): void
     {
-        $sink = new UdpEventSink(socketPath: $this->sockPath);
+        $sink = new AgentEventSink($this->sockPath);
 
         $event = Event::now()
             ->withApp('checkout', 'prod')
@@ -66,30 +64,12 @@ final class UdsEventSinkTest extends TestCase
         $sink->close();
     }
 
-    public function testHostAndPortAreIgnoredWhenSocketPathSet(): void
-    {
-        $sink = new UdpEventSink(
-            host: 'host.invalid',
-            port: 1,
-            socketPath: $this->sockPath,
-        );
-
-        $sink->send(Event::now()->withOperation('uds.only'));
-
-        $packet = $this->receiveOnePacket();
-        $this->assertNotNull($packet);
-        /** @var array<string, mixed> $decoded */
-        $decoded = \json_decode($packet, true, flags: \JSON_THROW_ON_ERROR);
-        $this->assertSame('uds.only', $decoded['operation'] ?? null);
-        $sink->close();
-    }
-
     public function testOpenFailureForMissingSocketIsLatchedAndLogged(): void
     {
         $logger = new RecordingLogger();
-        $sink = new UdpEventSink(
-            socketPath: '/tmp/mesh0-uds-event-missing-' . bin2hex(random_bytes(4)) . '.sock',
-            logger: $logger,
+        $sink = new AgentEventSink(
+            '/tmp/mesh0-agent-event-missing-' . bin2hex(random_bytes(4)) . '.sock',
+            $logger,
         );
 
         $sink->send(Event::now()->withOperation('a'));
@@ -98,7 +78,59 @@ final class UdsEventSinkTest extends TestCase
         $warnings = $logger->recordsAt('warning');
         $this->assertCount(1, $warnings);
         $this->assertStringContainsString('open failed', $warnings[0]['message']);
-        $this->assertSame('udg', $warnings[0]['context']['transport'] ?? null);
+    }
+
+    public function testOversizePayloadIsDroppedWithSingleWarning(): void
+    {
+        $logger = new RecordingLogger();
+        $sink = new AgentEventSink($this->sockPath, $logger);
+
+        $huge = str_repeat('x', AgentEventSink::MAX_DATAGRAM_BYTES);
+        $event = Event::now()
+            ->withOperation('big')
+            ->withAttribute('blob', $huge);
+
+        $sink->send($event);
+        $sink->send($event);
+
+        $this->assertNull($this->receiveOnePacket(50));
+        $warnings = $logger->recordsAt('warning');
+        $this->assertCount(1, $warnings, 'oversize warning should latch after first drop');
+        $this->assertStringContainsString('exceeds 32KB', $warnings[0]['message']);
+    }
+
+    public function testJsonEncodeFailureIsDroppedWithSingleWarning(): void
+    {
+        $logger = new RecordingLogger();
+        $sink = new AgentEventSink($this->sockPath, $logger);
+
+        // Invalid UTF-8 byte — json_encode throws JsonException with
+        // JSON_THROW_ON_ERROR rather than silently returning false.
+        $bad = "\xB1\x31";
+        $event = Event::now()
+            ->withOperation('encode-fail')
+            ->withAttribute('bad', $bad);
+
+        $sink->send($event);
+        $sink->send($event);
+
+        $this->assertNull($this->receiveOnePacket(50));
+        $warnings = $logger->recordsAt('warning');
+        $this->assertCount(1, $warnings, 'encode warning should latch after first drop');
+        $this->assertStringContainsString('json_encode', $warnings[0]['message']);
+    }
+
+    public function testRejectsRelativeSocketPath(): void
+    {
+        $this->expectException(ConfigurationException::class);
+        new AgentEventSink('relative/path.sock');
+    }
+
+    public function testRejectsTooLongSocketPath(): void
+    {
+        $this->expectException(ConfigurationException::class);
+        $this->expectExceptionMessageMatches('/sun_path/');
+        new AgentEventSink('/' . str_repeat('a', 104));
     }
 
     private function receiveOnePacket(int $timeoutMs = 500): ?string

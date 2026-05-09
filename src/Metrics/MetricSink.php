@@ -9,7 +9,7 @@ namespace Mesh0\Metrics;
  *
  * Implementations must be fire-and-forget: a metric send must never throw on
  * the request hot path or block longer than a syscall. Failures should be
- * swallowed (a UDP packet that doesn't make it is, by design, a non-event).
+ * swallowed (a datagram that doesn't make it is, by design, a non-event).
  */
 interface MetricSink
 {
@@ -22,7 +22,7 @@ interface MetricSink
     public function send(string $packet): void;
 
     /**
-     * Release any underlying resources (e.g. the UDP socket). Optional —
+     * Release any underlying resources (e.g. the UDS-DGRAM socket). Optional —
      * sinks must remain reusable after construction without an explicit
      * `open()` call.
      */

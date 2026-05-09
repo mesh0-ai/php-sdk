@@ -6,6 +6,7 @@ namespace Mesh0\Tests\Unit;
 
 use Mesh0\Client;
 use Mesh0\Config;
+use Mesh0\Exception\ConfigurationException;
 use Mesh0\Metrics\Metrics;
 use Mesh0\Tests\Support\InMemoryMetricSink;
 use Mesh0\Tests\Support\MockHttpClient;
@@ -13,22 +14,30 @@ use PHPUnit\Framework\TestCase;
 
 final class ClientMetricsTest extends TestCase
 {
-    private function client(): Client
+    private function client(?string $agentSocketPath = '/run/mesh0/agent.sock'): Client
     {
         return new Client(
-            new Config(apiKey: 'm0_abcde_aaaaaaaaaaaaaaaaaaaaaaaa'),
+            new Config(
+                apiKey: 'm0_abcde_aaaaaaaaaaaaaaaaaaaaaaaa',
+                agentSocketPath: $agentSocketPath,
+            ),
             new MockHttpClient(),
         );
     }
 
     public function testMetricsReturnsSameInstanceWhenCalledWithoutArgs(): void
     {
+        // Use a custom sink so the lazy-open never tries to actually
+        // touch /run/mesh0/agent.sock during the test.
         $client = $this->client();
+        $sink = new InMemoryMetricSink();
 
-        $a = $client->metrics();
-        $b = $client->metrics();
+        $a = $client->metrics(sink: $sink);
+        $cached = $client->metrics();
+        $cached2 = $client->metrics();
 
-        $this->assertSame($a, $b, 'argument-free metrics() should memoize');
+        $this->assertSame($cached, $cached2, 'argument-free metrics() should memoize');
+        $this->assertNotSame($a, $cached, 'sink override returns a fresh Metrics');
     }
 
     public function testMetricsReturnsFreshInstanceWhenCustomSinkProvided(): void
@@ -36,25 +45,21 @@ final class ClientMetricsTest extends TestCase
         $client = $this->client();
         $sink = new InMemoryMetricSink();
 
-        $cached = $client->metrics();
         $custom = $client->metrics(sink: $sink);
-
-        $this->assertNotSame($cached, $custom);
         $custom->increment('hit');
+
         $this->assertSame(['hit:1|c'], $sink->packets);
     }
 
-    public function testMetricsReturnsFreshInstanceWhenHostOrPortOverridden(): void
+    public function testMetricsReturnsFreshInstanceWhenSocketPathOverridden(): void
     {
         $client = $this->client();
+        $sink = new InMemoryMetricSink();
 
-        $cached = $client->metrics();
-        $other = $client->metrics(host: '10.0.0.2');
-        $third = $client->metrics(port: 9999);
+        $base = $client->metrics(sink: $sink);
+        $other = $client->metrics(socketPath: '/tmp/other.sock');
 
-        $this->assertNotSame($cached, $other);
-        $this->assertNotSame($cached, $third);
-        $this->assertNotSame($other, $third);
+        $this->assertNotSame($base, $other);
     }
 
     public function testMetricsReturnsFreshInstanceWhenDefaultTagsProvided(): void
@@ -62,16 +67,46 @@ final class ClientMetricsTest extends TestCase
         $client = $this->client();
         $sink = new InMemoryMetricSink();
 
-        $cached = $client->metrics();
         $tagged = $client->metrics(defaultTags: ['service' => 'api'], sink: $sink);
-
-        $this->assertNotSame($cached, $tagged);
         $tagged->increment('hit');
+
         $this->assertSame(['hit:1|c|#service:api'], $sink->packets);
     }
 
     public function testMetricsIsAMetricsInstance(): void
     {
-        $this->assertInstanceOf(Metrics::class, $this->client()->metrics());
+        $sink = new InMemoryMetricSink();
+        $this->assertInstanceOf(Metrics::class, $this->client()->metrics(sink: $sink));
+    }
+
+    public function testMetricsThrowsWhenAgentSocketPathMissing(): void
+    {
+        $client = $this->client(agentSocketPath: null);
+
+        $this->expectException(ConfigurationException::class);
+        $this->expectExceptionMessageMatches('/MESH0_AGENT_SOCKET/');
+        $client->metrics();
+    }
+
+    public function testEventsAgentThrowsWhenAgentSocketPathMissing(): void
+    {
+        $client = $this->client(agentSocketPath: null);
+
+        $this->expectException(ConfigurationException::class);
+        $this->expectExceptionMessageMatches('/MESH0_AGENT_SOCKET/');
+        $client->events()->agent();
+    }
+
+    public function testMetricsAllowsCustomSinkWithoutAgentSocketPath(): void
+    {
+        $client = $this->client(agentSocketPath: null);
+        $sink = new InMemoryMetricSink();
+
+        // Custom sink path bypasses the agent-socket-required check —
+        // useful for tests and for callers using non-agent transports.
+        $metrics = $client->metrics(sink: $sink);
+        $metrics->increment('ok');
+
+        $this->assertSame(['ok:1|c'], $sink->packets);
     }
 }

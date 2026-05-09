@@ -5,9 +5,10 @@ declare(strict_types=1);
 namespace Mesh0\Resource;
 
 use Mesh0\Config;
+use Mesh0\Event\AgentEventSink;
 use Mesh0\Event\Event;
 use Mesh0\Event\EventBuilder;
-use Mesh0\Event\UdpEventSink;
+use Mesh0\Exception\ConfigurationException;
 use Mesh0\Http\Transport;
 use Psr\Log\LoggerInterface;
 
@@ -22,7 +23,7 @@ final class Events
     /** Server-side hard cap (mirrors backend validation). */
     private const MAX_BATCH = 5000;
 
-    private ?UdpEventSink $udpSink = null;
+    private ?AgentEventSink $agentSink = null;
 
     public function __construct(
         private readonly Transport $http,
@@ -31,45 +32,46 @@ final class Events
     }
 
     /**
-     * Return a datagram event sink targeting a co-located mesh0 metrics-agent.
-     *
-     * The agent listens on UDP (default `127.0.0.1:8125`) — or on a Unix
-     * datagram socket when `socketPath` (or {@see Config::$metricsAgentSocketPath})
-     * is set — and forwards events to mesh0's `/v1/events` endpoint over
-     * HTTPS. Per-call cost is ~5µs, making this suitable for short-lived
-     * processes (PHP request handlers, CLI workers) that can't afford an
-     * HTTPS roundtrip per event.
+     * Return a UDS-DGRAM event sink targeting a co-located mesh0
+     * metrics-agent. The agent forwards events to mesh0's `/v1/events`
+     * endpoint over HTTPS. Per-call cost is ~5µs, making this suitable
+     * for short-lived processes (PHP request handlers, CLI workers)
+     * that can't afford an HTTPS roundtrip per event.
      *
      * Subsequent calls without arguments return the same instance. The
      * datagram path is at-most-once; for at-least-once durability use
-     * {@see send()} / {@see sendMany()} which POST to `/v1/events` directly.
+     * {@see send()} / {@see sendMany()} which POST to `/v1/events`
+     * directly.
      *
-     * Defaults read from {@see Config::$metricsAgentSocketPath} when set
-     * (UDS-DGRAM), otherwise {@see Config::$metricsAgentHost} /
-     * {@see Config::$metricsAgentPort} (UDP, agent listens on the same port
-     * for both metrics and events). When `socketPath` is set, `host` and
-     * `port` are ignored.
+     * The default `socketPath` is read from {@see Config::$agentSocketPath}
+     * (env `MESH0_AGENT_SOCKET`); if neither is set this method throws.
+     *
+     * @throws ConfigurationException when the resolved socket path is missing
+     *         (neither `socketPath` nor `Config::$agentSocketPath` is set), or
+     *         is invalid (non-absolute, or longer than the 104-byte sun_path
+     *         floor).
      */
-    public function udp(
-        ?string $host = null,
-        ?int $port = null,
-        ?LoggerInterface $logger = null,
+    public function agent(
         ?string $socketPath = null,
-    ): UdpEventSink {
-        $defaultHost = $this->config?->metricsAgentHost ?? UdpEventSink::DEFAULT_HOST;
-        $defaultPort = $this->config?->metricsAgentPort ?? UdpEventSink::DEFAULT_PORT;
-        $defaultSocket = $this->config?->metricsAgentSocketPath;
+        ?LoggerInterface $logger = null,
+    ): AgentEventSink {
+        $defaultSocket = $this->config?->agentSocketPath;
 
-        if ($host !== null || $port !== null || $logger !== null || $socketPath !== null) {
-            return new UdpEventSink(
-                $host ?? $defaultHost,
-                $port ?? $defaultPort,
-                $logger,
-                $socketPath ?? $defaultSocket,
-            );
+        if ($socketPath !== null || $logger !== null) {
+            return new AgentEventSink($socketPath ?? $this->requireSocketPath($defaultSocket), $logger);
         }
 
-        return $this->udpSink ??= new UdpEventSink($defaultHost, $defaultPort, null, $defaultSocket);
+        return $this->agentSink ??= new AgentEventSink($this->requireSocketPath($defaultSocket));
+    }
+
+    private function requireSocketPath(?string $socketPath): string
+    {
+        if ($socketPath === null) {
+            throw new ConfigurationException(
+                'Config::$agentSocketPath (env MESH0_AGENT_SOCKET) is not set; cannot build an agent event sink',
+            );
+        }
+        return $socketPath;
     }
 
     /**
