@@ -11,6 +11,8 @@ Send logs, custom events, and OTLP traces; query them back with TQL.
 - **PSR-3** logger you can drop into Laravel, Symfony, Slim, …
 - **PSR-18** HTTP client — bring your own (Guzzle, Symfony HTTP, …) or rely on auto-discovery
 - **Built-in retries** for transient failures with exponential backoff + jitter
+- **Nested-span instrumentation** — `Mesh0\Trace\Tracer` for trees of operations (no-code blocks, request handlers, job pipelines)
+- **Low-latency UDP path** — `~5µs/call` via the local mesh0 metrics-agent sidecar
 - **Tested at PHPStan level 9**
 
 ---
@@ -91,6 +93,10 @@ Special context keys are lifted onto first-class event fields:
 
 Everything else is merged into `attributes`. Records are buffered in memory
 and flushed on `flush()`, when the buffer fills, and on shutdown.
+
+If you pass a [`Tracer`](#instrumenting-nested-operations-tracer) to
+`logger(...)`, log records emitted inside an active span pick up
+`trace_id` / `span_id` automatically when you don't supply them yourself.
 
 ### Laravel
 
@@ -244,13 +250,7 @@ of `span_id`s, and emits exactly one event per closed span through any
 `EventSink` (typically the same UDP sink shown above):
 
 ```php
-use Mesh0\Trace\Tracer;
-
-$tracer = new Tracer(
-    sink: $mesh0->events->udp(),
-    appId: 'no-code-runtime',
-    environment: 'prod',
-);
+$tracer = $mesh0->tracer(appId: 'no-code-runtime', environment: 'prod');
 
 // Closure form — exception-safe, auto-pop, recommended:
 $result = $tracer->span('block.if', ['block_id' => 'b_123'], function () use ($tracer) {
@@ -286,13 +286,13 @@ $tracer->startTrace($_SERVER['HTTP_TRACEPARENT'] ?? null);
 // First enter() of the request now links to the upstream parent span.
 ```
 
-**Logs that auto-correlate to the active span:** pass the tracer to
-`Mesh0Logger` and any log record emitted inside a `span()` will pick up
+**Logs that auto-correlate to the active span:** pass the tracer when
+building the logger and any record emitted inside a `span()` will pick up
 `trace_id` / `span_id` automatically when not supplied in the PSR-3
 context:
 
 ```php
-$logger = new Mesh0\Logger\Mesh0Logger(client: $mesh0, tracer: $tracer);
+$logger = $mesh0->logger(appId: 'no-code-runtime', tracer: $tracer);
 
 $tracer->span('block.http_request', [], function () use ($logger) {
     $logger->info('calling upstream'); // trace_id / span_id stamped automatically

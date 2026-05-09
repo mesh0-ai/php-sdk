@@ -13,6 +13,7 @@ use Mesh0\Resource\Events;
 use Mesh0\Resource\Meta;
 use Mesh0\Resource\Query;
 use Mesh0\Resource\Traces;
+use Mesh0\Trace\Tracer;
 use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestFactoryInterface;
 use Psr\Http\Message\StreamFactoryInterface;
@@ -144,6 +145,7 @@ final class Client
         ?string $environment = null,
         int $bufferSize = 50,
         array $defaults = [],
+        ?Tracer $tracer = null,
     ): LoggerInterface {
         return new Mesh0Logger(
             client: $this,
@@ -151,6 +153,26 @@ final class Client
             environment: $environment,
             bufferSize: $bufferSize,
             defaults: $defaults,
+            tracer: $tracer,
+        );
+    }
+
+    /**
+     * Build a {@see Tracer} that ships each closed span through the local
+     * metrics-agent UDP sink. Convenience factory — call `new Tracer(...)`
+     * directly if you want a different sink (e.g. an in-memory test sink or
+     * a custom transport).
+     */
+    public function tracer(
+        ?string $appId = null,
+        ?string $environment = null,
+        ?LoggerInterface $logger = null,
+    ): Tracer {
+        return new Tracer(
+            sink: $this->events->udp(),
+            appId: $appId,
+            environment: $environment,
+            logger: $logger,
         );
     }
 }

@@ -27,8 +27,9 @@ src/
 ├── Config.php             # immutable config + env loader
 ├── Exception/             # one class per failure mode, all extend Mesh0Exception
 ├── Http/Transport.php     # PSR-18 wrapper: auth, JSON, retries
-├── Event/                 # Event + EventBuilder + value objects (Status, Usage, Model)
+├── Event/                 # Event + EventBuilder + value objects (Status, Usage, Model) + EventSink
 ├── Logger/Mesh0Logger.php # PSR-3 logger that ships records as events
+├── Trace/                 # Tracer + SpanHandle (nested-span instrumentation, in-process state)
 └── Resource/              # one class per API namespace (Events, Traces, Query, Meta)
 tests/
 ├── Support/               # MockHttpClient

@@ -24,6 +24,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `Mesh0Logger` accepts an optional `Tracer`. Log records emitted inside an
   active span auto-stamp `trace_id` / `span_id` from the tracer when the
   caller did not supply them in the PSR-3 context.
+- `Client::tracer(?appId, ?environment, ?logger)` factory builds a `Tracer`
+  pre-wired to the local UDP event sink. `Client::logger(...)` gains a
+  `?Tracer $tracer` parameter so PSR-3 logs auto-correlate without manually
+  constructing `Mesh0Logger`.
 
 ### Notes
 - Spans are independent on the wire — there is no "session start" or
