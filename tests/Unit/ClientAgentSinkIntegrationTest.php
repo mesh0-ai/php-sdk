@@ -11,12 +11,13 @@ use Mesh0\Tests\Support\MockHttpClient;
 use PHPUnit\Framework\TestCase;
 
 /**
- * End-to-end wiring check: `Config::$metricsAgentSocketPath` must reach the
- * lazy `UdpMetricSink` / `UdpEventSink` constructed by `Client::metrics()`
- * and `Events::udp()` so a regression in the factory plumbing (dropped
- * argument, wrong default) doesn't silently fall back to UDP loopback.
+ * End-to-end wiring check: `Config::$agentSocketPath` must reach the
+ * lazy `AgentMetricSink` / `AgentEventSink` constructed by
+ * `Client::metrics()` and `Events::agent()` so a regression in the
+ * factory plumbing (dropped argument, wrong default) doesn't silently
+ * misconfigure the sink.
  */
-final class ClientUdsIntegrationTest extends TestCase
+final class ClientAgentSinkIntegrationTest extends TestCase
 {
     /** @var resource|null */
     private $server = null;
@@ -26,9 +27,7 @@ final class ClientUdsIntegrationTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        // /tmp avoids the macOS sun_path 104-byte cap that sys_get_temp_dir
-        // can blow through.
-        $this->sockPath = '/tmp/mesh0-uds-client-' . bin2hex(random_bytes(4)) . '.sock';
+        $this->sockPath = '/tmp/mesh0-agent-client-' . bin2hex(random_bytes(4)) . '.sock';
 
         $errno = 0;
         $errstr = '';
@@ -56,30 +55,30 @@ final class ClientUdsIntegrationTest extends TestCase
     {
         $client = $this->client(socketPath: $this->sockPath);
 
-        $client->metrics()->increment('client.uds.hit');
+        $client->metrics()->increment('client.agent.hit');
 
-        $this->assertSame('client.uds.hit:1|c', $this->receiveOnePacket());
+        $this->assertSame('client.agent.hit:1|c', $this->receiveOnePacket());
     }
 
-    public function testClientEventsUdpSinkUsesConfigSocketPath(): void
+    public function testEventsAgentSinkUsesConfigSocketPath(): void
     {
         $client = $this->client(socketPath: $this->sockPath);
 
-        $client->events()->udp()->send(
-            Event::now()->withOperation('client.uds.event'),
+        $client->events()->agent()->send(
+            Event::now()->withOperation('client.agent.event'),
         );
 
         $packet = $this->receiveOnePacket();
         $this->assertNotNull($packet);
         /** @var array<string, mixed> $decoded */
         $decoded = \json_decode($packet, true, flags: \JSON_THROW_ON_ERROR);
-        $this->assertSame('client.uds.event', $decoded['operation'] ?? null);
+        $this->assertSame('client.agent.event', $decoded['operation'] ?? null);
     }
 
     public function testPerCallSocketPathOverridesConfig(): void
     {
         // Config points at a bogus path; per-call socketPath should win.
-        $client = $this->client(socketPath: '/tmp/mesh0-uds-not-bound-' . bin2hex(random_bytes(4)) . '.sock');
+        $client = $this->client(socketPath: '/tmp/mesh0-agent-not-bound-' . bin2hex(random_bytes(4)) . '.sock');
 
         $client->metrics(socketPath: $this->sockPath)->increment('override');
 
@@ -91,7 +90,7 @@ final class ClientUdsIntegrationTest extends TestCase
         return new Client(
             new Config(
                 apiKey: 'm0_abcde_aaaaaaaaaaaaaaaaaaaaaaaa',
-                metricsAgentSocketPath: $socketPath,
+                agentSocketPath: $socketPath,
             ),
             new MockHttpClient(),
         );

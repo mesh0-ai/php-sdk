@@ -4,6 +4,58 @@ All notable changes to `mesh0/sdk` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.0.0 - 2026-05-08
+
+UDS-DGRAM is now the only transport for the local metrics-agent. UDP
+support has been removed; the SDK no longer speaks `udp://host:port`.
+This is a breaking change — see the migration notes below.
+
+### Removed
+- `UdpMetricSink` and `UdpEventSink`. Replaced by `AgentMetricSink`
+  (`Mesh0\Metrics\AgentMetricSink`) and `AgentEventSink`
+  (`Mesh0\Event\AgentEventSink`), both of which require an absolute
+  Unix-domain socket path.
+- `Config::$metricsAgentHost`, `Config::$metricsAgentPort`, and the
+  related `DEFAULT_METRICS_AGENT_HOST` / `DEFAULT_METRICS_AGENT_PORT`
+  constants. Replaced by `Config::$agentSocketPath`.
+- Environment variables `MESH0_AGENT_HOST` and `MESH0_AGENT_PORT`.
+  Replaced by `MESH0_AGENT_SOCKET`.
+- `Metrics::udp(host, port)` static factory. Replaced by
+  `Metrics::agent(socketPath)`.
+- `Events::udp(host, port, logger, socketPath)`. Replaced by
+  `Events::agent(socketPath, logger)`.
+- The `host` and `port` parameters on `Client::metrics()`. The new
+  signature is `metrics(?string $socketPath, array $defaultTags, ?MetricSink $sink)`.
+
+### Changed
+- `Client::metrics()` and `Events::agent()` now throw
+  `ConfigurationException` when no `agentSocketPath` is configured (no
+  silent UDP loopback fallback).
+- Sink constructors validate the socket path: must be absolute and
+  ≤104 bytes (the macOS/BSD `sun_path` floor).
+
+### Migration
+
+```diff
+- export MESH0_AGENT_HOST=127.0.0.1
+- export MESH0_AGENT_PORT=8125
++ export MESH0_AGENT_SOCKET=/run/mesh0/agent.sock
+```
+
+```diff
+- $metrics = $mesh0->metrics(host: 'mesh0-agent', port: 9125);
++ $metrics = $mesh0->metrics(socketPath: '/run/mesh0/agent.sock');
+
+- $sink = $mesh0->events->udp();
++ $sink = $mesh0->events->agent();
+
+- new UdpMetricSink('127.0.0.1', 8125);
++ new AgentMetricSink('/run/mesh0/agent.sock');
+```
+
+Pair with metrics-agent `>= 0.3.0` and
+`MESH0_LISTEN_ADDR=unix:///run/mesh0/agent.sock`.
+
 ## 0.5.0 - 2026-05-08
 
 ### Added

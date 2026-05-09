@@ -4,44 +4,34 @@ declare(strict_types=1);
 
 namespace Mesh0\Event;
 
+use Mesh0\Exception\ConfigurationException;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 
 /**
- * Datagram event sink targeting a co-located mesh0 metrics-agent.
+ * UDS-DGRAM event sink targeting a co-located mesh0 metrics-agent.
  *
- * Each event is encoded as a single JSON datagram and sent to the agent,
- * which batches and forwards them to `/v1/events` over HTTPS. This trades
- * at-least-once durability for ~5µs per-call cost — useful for short-lived
- * processes (PHP request handlers, CLI workers) where an HTTPS roundtrip
- * per event is unaffordable.
+ * Each event is encoded as a single JSON datagram and sent to the agent
+ * over `udg://<socketPath>`, which batches and forwards them to
+ * `/v1/events` over HTTPS. This trades at-least-once durability for
+ * ~5µs per-call cost — useful for short-lived processes (PHP request
+ * handlers, CLI workers) where an HTTPS roundtrip per event is
+ * unaffordable.
  *
- * Speaks one of two transports, both fire-and-forget:
- *
- * - **UDP** (default): `host:port`, addresses the agent's UDP listener.
- * - **UDS-DGRAM**: pass `socketPath` to open `udg://<path>` against the
- *   agent's Unix-domain datagram socket. Lifts the ~64 KB UDP fragmentation
- *   ceiling and avoids the IP stack entirely on a single host.
- *
- * The socket is opened lazily on the first `send()` so constructing a sink
- * performs zero I/O. Send errors are intentionally swallowed (datagrams are
- * at-most-once); an optional PSR-3 logger receives a single `warning` per
- * state transition (open failure / write failure / oversize drop) so missing
- * telemetry is at least observable. See `UdpMetricSink` for the rationale
- * behind keeping the `Udp` class name across both transports.
+ * The socket is opened lazily on the first `send()` so constructing a
+ * sink performs zero I/O. Send errors are intentionally swallowed
+ * (datagrams are at-most-once); an optional PSR-3 logger receives a
+ * single `warning` per state transition (open failure / write failure /
+ * oversize drop) so missing telemetry is at least observable. The
+ * open-failure latch is terminal for the lifetime of the sink.
  */
-final class UdpEventSink implements EventSink
+final class AgentEventSink implements EventSink
 {
-    public const DEFAULT_HOST = '127.0.0.1';
-    public const DEFAULT_PORT = 8125;
-
     /**
-     * Maximum size of a single datagram. Anything larger risks IP
-     * fragmentation (UDP) or being silently dropped by the kernel; we drop
-     * with a single warning rather than crash the request path. Matches
-     * the agent's documented per-datagram limit at the time of writing
-     * (metrics-agent >= 0.3.0); the agent will reject larger payloads
-     * regardless.
+     * Maximum size of a single datagram. Larger payloads are silently
+     * dropped by the kernel; we drop with a single warning rather than
+     * crash the request path. Matches the agent's documented
+     * per-datagram limit at the time of writing (metrics-agent >= 0.3.0).
      */
     public const MAX_DATAGRAM_BYTES = 32_768;
 
@@ -55,11 +45,15 @@ final class UdpEventSink implements EventSink
     private readonly LoggerInterface $logger;
 
     public function __construct(
-        private readonly string $host = self::DEFAULT_HOST,
-        private readonly int $port = self::DEFAULT_PORT,
+        private readonly string $socketPath,
         ?LoggerInterface $logger = null,
-        private readonly ?string $socketPath = null,
     ) {
+        if ($socketPath === '' || $socketPath[0] !== '/') {
+            throw new ConfigurationException('socketPath must be an absolute filesystem path');
+        }
+        if (\strlen($socketPath) > 104) {
+            throw new ConfigurationException('socketPath exceeds 104 bytes (sun_path limit)');
+        }
         $this->logger = $logger ?? new NullLogger();
     }
 
@@ -93,16 +87,16 @@ final class UdpEventSink implements EventSink
             return;
         }
 
-        // Network failures (peer unreachable, ICMP "port unreachable") must
-        // never bubble up. We narrow suppression to fwrite, then invalidate
-        // the cached socket on failure so the next call retries from scratch.
         try {
             $written = @\fwrite($sock, $payload);
         } catch (\Throwable) {
             $written = false;
         }
         if ($written === false || $written === 0) {
-            $this->logger->warning('mesh0 event write failed; dropping subsequent packets until reset', $this->endpointContext());
+            $this->logger->warning(
+                'mesh0 event write failed; dropping subsequent packets until reset',
+                ['path' => $this->socketPath],
+            );
             $this->resetSocket();
         }
     }
@@ -130,8 +124,6 @@ final class UdpEventSink implements EventSink
     private function resetSocket(): void
     {
         if (\is_resource($this->socket)) {
-            // fclose can warn on an invalid resource (programmer error); let
-            // it surface in dev. We only suppress UDP transport failures.
             \fclose($this->socket);
         }
         $this->socket = null;
@@ -149,7 +141,7 @@ final class UdpEventSink implements EventSink
         $errno = 0;
         $errstr = '';
         $sock = @\stream_socket_client(
-            $this->endpointUri(),
+            "udg://{$this->socketPath}",
             $errno,
             $errstr,
             1.0,
@@ -159,7 +151,7 @@ final class UdpEventSink implements EventSink
             $this->failedToOpen = true;
             $this->logger->warning(
                 'mesh0 event socket open failed; events disabled for this sink',
-                $this->endpointContext() + ['errno' => $errno, 'errstr' => $errstr],
+                ['path' => $this->socketPath, 'errno' => $errno, 'errstr' => $errstr],
             );
             return null;
         }
@@ -168,22 +160,5 @@ final class UdpEventSink implements EventSink
         \stream_set_blocking($sock, false);
         $this->socket = $sock;
         return $sock;
-    }
-
-    private function endpointUri(): string
-    {
-        if ($this->socketPath !== null) {
-            return "udg://{$this->socketPath}";
-        }
-        return "udp://{$this->host}:{$this->port}";
-    }
-
-    /** @return array<string, string|int> */
-    private function endpointContext(): array
-    {
-        if ($this->socketPath !== null) {
-            return ['transport' => 'udg', 'path' => $this->socketPath];
-        }
-        return ['transport' => 'udp', 'host' => $this->host, 'port' => $this->port];
     }
 }

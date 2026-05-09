@@ -12,7 +12,7 @@ Send logs, custom events, and OTLP traces; query them back with TQL.
 - **PSR-18** HTTP client — bring your own (Guzzle, Symfony HTTP, …) or rely on auto-discovery
 - **Built-in retries** for transient failures with exponential backoff + jitter
 - **Nested-span instrumentation** — `Mesh0\Trace\Tracer` for trees of operations (no-code blocks, request handlers, job pipelines)
-- **Low-latency UDP path** — `~5µs/call` via the local mesh0 metrics-agent sidecar
+- **Low-latency UDS-DGRAM path** — `~5µs/call` via the local mesh0 metrics-agent sidecar
 - **Tested at PHPStan level 9**
 
 ---
@@ -172,14 +172,22 @@ $spans = $mesh0->traces->get($traceId);
 
 ---
 
-## Metrics (statsd / DogStatsD over UDP)
+## Metrics (statsd / DogStatsD over UDS-DGRAM)
 
-For high-frequency counters, gauges, and timings — the kind of telemetry that
-shouldn't go through the request-blocking HTTPS path — point at a co-located
-[mesh0 metrics-agent](https://github.com/mesh0-ai/metrics-agent) sidecar:
+For high-frequency counters, gauges, and timings — the kind of telemetry
+that shouldn't go through the request-blocking HTTPS path — point at a
+co-located [mesh0 metrics-agent](https://github.com/mesh0-ai/metrics-agent)
+sidecar over its Unix datagram socket. UDP support was removed in 1.0;
+the SDK speaks `udg://<path>` exclusively.
+
+Set the agent's bind path once via env or `Config`:
+
+```sh
+export MESH0_AGENT_SOCKET=/run/mesh0/agent.sock
+```
 
 ```php
-$metrics = $mesh0->metrics(); // UDP 127.0.0.1:8125 by default
+$metrics = $mesh0->metrics(); // reads MESH0_AGENT_SOCKET / Config::$agentSocketPath
 
 $metrics->increment('checkout.charge', tags: ['tier' => 'pro']);
 $metrics->gauge('queue.depth', 42);
@@ -190,68 +198,47 @@ $metrics->histogram('upload.bytes', 8192);
 $rows = $metrics->time('db.select_ms', fn () => $pdo->query($sql)->fetchAll());
 ```
 
-The socket is opened lazily on the first send, so `$mesh0->metrics()` does
-no I/O. Override the agent address via `Config` (or `MESH0_AGENT_HOST` /
-`MESH0_AGENT_PORT`):
+The socket is opened lazily on the first send, so `$mesh0->metrics()`
+does no I/O. Per-call override:
 
 ```php
-$metrics = $mesh0->metrics(host: 'mesh0-agent', port: 9125, defaultTags: [
+$metrics = $mesh0->metrics(socketPath: '/tmp/mesh0-test.sock', defaultTags: [
     'service' => 'checkout',
     'env'     => 'prod',
 ]);
 ```
 
-### Unix-domain socket transport (UDS-DGRAM)
-
-When the SDK and the agent share a host (the typical sidecar layout), a
-Unix datagram socket is a strictly better local wire than UDP loopback:
-no IP fragmentation ceiling, no port to coordinate, lossless on a healthy
-host. Set `MESH0_AGENT_SOCKET` (or `Config::$metricsAgentSocketPath`) to
-the agent's bind path and the sinks open `udg://<path>` instead of
-`udp://host:port`:
-
-```sh
-export MESH0_AGENT_SOCKET=/run/mesh0/agent.sock
-```
-
-```php
-// Both metrics and events automatically pick up the socket path.
-$metrics = $mesh0->metrics();
-$udp     = $mesh0->events->udp();
-
-// Or per-call:
-$metrics = $mesh0->metrics(socketPath: '/run/mesh0/agent.sock');
-```
-
 The agent must be configured with a matching `MESH0_LISTEN_ADDR`
-(`unix:///run/mesh0/agent.sock`). When `socketPath` is set, the host /
-port options are ignored.
+(`unix:///run/mesh0/agent.sock`). Calling `metrics()` (or
+`events()->agent()`) without an `agentSocketPath` set throws
+`ConfigurationException` — there is no UDP loopback fallback.
 
 ### Failure semantics
 
 Datagram send failures (peer unreachable, agent not running) are
 swallowed — the request path never throws on transport. Pass an optional
-PSR-3 logger via `new UdpMetricSink(logger: $log)` to surface a single
-warning per state transition (open failure, write failure, oversize drop).
-Note: the open-failure latch is terminal for the lifetime of the sink —
+PSR-3 logger via `new AgentMetricSink($path, $log)` to surface a single
+warning per state transition (open failure, write failure, oversize
+drop). The open-failure latch is terminal for the lifetime of the sink —
 long-lived workers that need to recover from a transient agent restart
-should construct a fresh sink rather than rely on auto-reopen. Malformed metric names or tags do throw `ConfigurationException`
-so programmer errors fail loudly in development rather than silently
-disappearing. `sampleRate` outside `(0, 1]` is clamped (≤0 drops, ≥1 always
-emits) rather than throwing.
+should construct a fresh sink rather than rely on auto-reopen. Malformed
+metric names or tags throw `ConfigurationException` so programmer errors
+fail loudly in development rather than silently disappearing.
+`sampleRate` outside `(0, 1]` is clamped (≤0 drops, ≥1 always emits)
+rather than throwing.
 
 ---
 
-## Sending events over UDP (low-latency)
+## Sending events over UDS-DGRAM (low-latency)
 
 For short-lived processes (PHP request handlers, CLI workers) that can't
-afford an HTTPS roundtrip per event, fire events at the same metrics-agent
-sidecar as JSON datagrams (~5µs per call):
+afford an HTTPS roundtrip per event, fire events at the same
+metrics-agent sidecar as JSON datagrams (~5µs per call):
 
 ```php
-$udp = $mesh0->events->udp(); // UDP 127.0.0.1:8125 by default
+$agent = $mesh0->events->agent(); // reads MESH0_AGENT_SOCKET / Config::$agentSocketPath
 
-$udp->send(
+$agent->send(
     Mesh0\Event\Event::now()
         ->withApp('checkout', 'prod')
         ->withOperation('charge.succeeded')
@@ -259,12 +246,12 @@ $udp->send(
 );
 
 // Bulk loop — the agent batches before forwarding to mesh0.
-$udp->sendMany([$e1, $e2, $e3]);
+$agent->sendMany([$e1, $e2, $e3]);
 ```
 
-The socket is opened lazily on the first send. Datagrams larger than 32KB
-are dropped with a single warning (pass a PSR-3 logger to observe), and
-transport errors are swallowed — `send()` never throws.
+The socket is opened lazily on the first send. Datagrams larger than
+32KB are dropped with a single warning (pass a PSR-3 logger to observe),
+and transport errors are swallowed — `send()` never throws.
 
 This path is **at-most-once**: if the local agent is down or the kernel
 drops the datagram, the event is gone. For at-least-once durability, use
@@ -278,7 +265,7 @@ For trees of nested operations — no-code block executions, request → job
 pipelines, anything where a parent's wall-clock includes its children —
 use `Mesh0\Trace\Tracer`. It manages a per-execution `trace_id` and a stack
 of `span_id`s, and emits exactly one event per closed span through any
-`EventSink` (typically the same UDP sink shown above):
+`EventSink` (typically the same agent sink shown above):
 
 ```php
 $tracer = $mesh0->tracer(appId: 'no-code-runtime', environment: 'prod');
@@ -299,7 +286,7 @@ try {
 }
 ```
 
-Each `enter`/`exit` pair becomes one independent UDP datagram on the way
+Each `enter`/`exit` pair becomes one independent datagram on the way
 out; the metrics-agent forwards them verbatim and ClickHouse reassembles
 the trace via `trace_id` at query time. There is no "session start" or
 "session end" — children always close before parents because the parent's
@@ -318,8 +305,8 @@ $tracer->startTrace($_SERVER['HTTP_TRACEPARENT'] ?? null);
 ```
 
 **Logs that auto-correlate to the active span:** pass the tracer when
-building the logger and any record emitted inside a `span()` will pick up
-`trace_id` / `span_id` automatically when not supplied in the PSR-3
+building the logger and any record emitted inside a `span()` will pick
+up `trace_id` / `span_id` automatically when not supplied in the PSR-3
 context:
 
 ```php
@@ -376,13 +363,11 @@ $mesh0 = new Client(new Config(
 
 ### Environment variables
 
-| Variable          | Description                                         |
-| ----------------- | --------------------------------------------------- |
-| `MESH0_API_KEY`     | API key (`m0_<routing>_<secret>`). **Required.**  |
-| `MESH0_BASE_URL`    | Override base URL (self-hosted deployments).      |
-| `MESH0_AGENT_HOST`  | metrics-agent host (default `127.0.0.1`).         |
-| `MESH0_AGENT_PORT`  | metrics-agent UDP port (default `8125`).          |
-| `MESH0_AGENT_SOCKET`| Unix-domain socket path. When set, the SDK opens `udg://<path>` and ignores host/port. |
+| Variable             | Description                                                       |
+| -------------------- | ----------------------------------------------------------------- |
+| `MESH0_API_KEY`      | API key (`m0_<routing>_<secret>`). **Required.**                  |
+| `MESH0_BASE_URL`     | Override base URL (self-hosted deployments).                      |
+| `MESH0_AGENT_SOCKET` | Absolute path to the metrics-agent's Unix datagram socket. Required for `metrics()` / `events->agent()`. |
 
 ### Custom HTTP client
 

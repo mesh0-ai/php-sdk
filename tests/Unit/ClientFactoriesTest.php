@@ -30,7 +30,15 @@ final class ClientFactoriesTest extends TestCase
     {
         $factory = new HttpFactory();
         return new Client(
-            new Config(apiKey: 'm0_abcde_aaaaaaaaaaaaaaaaaaaaaaaa', maxRetries: 0),
+            new Config(
+                apiKey: 'm0_abcde_aaaaaaaaaaaaaaaaaaaaaaaa',
+                maxRetries: 0,
+                // Tracer factory builds an AgentEventSink lazily; the
+                // socket is opened on first send(), so a non-bound path
+                // is fine here — these tests don't actually fire any
+                // datagrams that would cause an open attempt.
+                agentSocketPath: '/tmp/mesh0-clientfactories-' . bin2hex(random_bytes(4)) . '.sock',
+            ),
             $this->mock,
             $factory,
             $factory,
@@ -59,7 +67,7 @@ final class ClientFactoriesTest extends TestCase
         $this->assertSame($h->spanId, $event['span_id']);
     }
 
-    public function testTracerFactoryReturnsTracerWithUdpSink(): void
+    public function testTracerFactoryReturnsTracerWithAgentSink(): void
     {
         $tracer = $this->client()->tracer(appId: 'web', environment: 'prod');
 

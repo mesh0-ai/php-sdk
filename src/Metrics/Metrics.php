@@ -9,12 +9,12 @@ use Mesh0\Exception\ConfigurationException;
 /**
  * Thin statsd / DogStatsD client targeting the mesh0 metrics-agent.
  *
- * The agent (see `mesh0/metrics-agent`) listens on UDP and aggregates
- * counters, gauges, and timings before forwarding them to mesh0 over HTTPS.
- * This class only formats and emits one-shot UDP datagrams — there is no
- * in-process aggregation, buffering, or retry. That's intentional: the
- * request-scoped PHP runtime stays free of background work, and durability
- * lives in the long-running agent.
+ * The agent (see `mesh0/metrics-agent`) listens on a Unix datagram
+ * socket and aggregates counters, gauges, and timings before forwarding
+ * them to mesh0 over HTTPS. This class only formats and emits one-shot
+ * datagrams — there is no in-process aggregation, buffering, or retry.
+ * That's intentional: the request-scoped PHP runtime stays free of
+ * background work, and durability lives in the long-running agent.
  *
  * Wire format (one line per metric, `\n`-separated within a packet):
  *
@@ -57,16 +57,14 @@ final class Metrics
     }
 
     /**
-     * Build a `Metrics` over a UDP sink pointing at a local agent.
+     * Build a `Metrics` over an `AgentMetricSink` pointing at a local
+     * metrics-agent's Unix datagram socket.
      *
      * @param array<string, string|int|float> $defaultTags
      */
-    public static function udp(
-        string $host = UdpMetricSink::DEFAULT_HOST,
-        int $port = UdpMetricSink::DEFAULT_PORT,
-        array $defaultTags = [],
-    ): self {
-        return new self(new UdpMetricSink($host, $port), $defaultTags);
+    public static function agent(string $socketPath, array $defaultTags = []): self
+    {
+        return new self(new AgentMetricSink($socketPath), $defaultTags);
     }
 
     /**
