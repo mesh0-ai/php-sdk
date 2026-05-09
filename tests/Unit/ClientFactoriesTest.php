@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Mesh0\Tests\Unit;
 
+use GuzzleHttp\Psr7\HttpFactory;
 use Mesh0\Client;
 use Mesh0\Config;
 use Mesh0\Logger\Mesh0Logger;
@@ -17,11 +18,22 @@ use PHPUnit\Framework\TestCase;
  */
 final class ClientFactoriesTest extends TestCase
 {
+    private MockHttpClient $mock;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        $this->mock = new MockHttpClient();
+    }
+
     private function client(): Client
     {
+        $factory = new HttpFactory();
         return new Client(
-            new Config(apiKey: 'm0_abcde_aaaaaaaaaaaaaaaaaaaaaaaa'),
-            new MockHttpClient(),
+            new Config(apiKey: 'm0_abcde_aaaaaaaaaaaaaaaaaaaaaaaa', maxRetries: 0),
+            $this->mock,
+            $factory,
+            $factory,
         );
     }
 
@@ -35,20 +47,16 @@ final class ClientFactoriesTest extends TestCase
     {
         $client = $this->client();
         $tracer = $client->tracer(appId: 'web');
+        $logger = $client->logger(bufferSize: 1, tracer: $tracer);
 
-        $logger = $client->logger(tracer: $tracer);
-
-        // Open a span; the logger should auto-stamp its trace context onto
-        // the next record (the actual stamping is asserted in Mesh0LoggerTest;
-        // here we only verify the wiring took effect).
         $h = $tracer->enter('block.execute');
-        try {
-            $reflection = new \ReflectionObject($logger);
-            $tracerProp = $reflection->getProperty('tracer');
-            $this->assertSame($tracer, $tracerProp->getValue($logger));
-        } finally {
-            $tracer->exit($h);
-        }
+        $this->mock->queueJson(200, ['accepted' => 1]);
+        $logger->info('inside the span');
+        $tracer->exit($h);
+
+        $event = $this->mock->lastEvent();
+        $this->assertSame($h->traceId, $event['trace_id']);
+        $this->assertSame($h->spanId, $event['span_id']);
     }
 
     public function testTracerFactoryReturnsTracerWithUdpSink(): void

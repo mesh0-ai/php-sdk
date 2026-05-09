@@ -35,6 +35,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ClickHouse reassembles the trace via `trace_id` at query time.
 - No changes to `Event`, `EventBuilder`, `UdpEventSink`'s wire format, or
   any HTTP resource. Adding `EventSink` to `UdpEventSink` is non-breaking.
+- Closing a non-top span (the matching handle is below other open frames)
+  emits the matched span and warns through PSR-3 with the count and
+  operation names of the dropped inner frames, so a missed `exit()` upstream
+  is observable rather than silent data loss.
 
 ## 0.3.0 - 2026-05-08
 

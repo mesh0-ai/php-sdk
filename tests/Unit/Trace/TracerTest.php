@@ -290,4 +290,66 @@ final class TracerTest extends TestCase
         $warnings = array_filter($logger->records, static fn (array $r): bool => $r['level'] === 'warning');
         $this->assertNotEmpty($warnings);
     }
+
+    public function testExitingNonTopHandleEmitsThatSpanAndWarnsAboutDroppedFrames(): void
+    {
+        $logger = new RecordingLogger();
+        $tracer = new Tracer($this->sink, logger: $logger);
+
+        $a = $tracer->enter('outer');
+        $tracer->enter('middle');
+        $tracer->enter('inner');
+
+        // Skip middle/inner exits — close the outer handle directly.
+        $tracer->exit($a);
+
+        // Only `outer` is emitted; `middle` and `inner` are dropped, but a
+        // warning records the loss so it isn't silent data loss.
+        $this->assertCount(1, $this->sink->events);
+        $this->assertSame('outer', $this->sink->events[0]->operation);
+        $this->assertFalse($tracer->hasOpenSpan());
+
+        $warnings = array_values(array_filter(
+            $logger->records,
+            static fn (array $r): bool => $r['level'] === 'warning',
+        ));
+        $this->assertCount(1, $warnings);
+        $this->assertSame(2, $warnings[0]['context']['dropped_count']);
+        $this->assertSame(['middle', 'inner'], $warnings[0]['context']['dropped_operations']);
+    }
+
+    public function testEnvironmentOnlyConstructionStillStampsAppFields(): void
+    {
+        // Regression guard for the `withApp($appId ?? '', $environment)` branch
+        // when only one of the two is configured.
+        $tracer = new Tracer($this->sink, environment: 'staging');
+        $tracer->span('block.execute', [], static fn () => null);
+
+        $event = $this->sink->events[0];
+        $this->assertSame('', $event->appId);
+        $this->assertSame('staging', $event->environment);
+    }
+
+    public function testStartTraceAcceptsAnyFlagsByteAsW3CRequires(): void
+    {
+        // W3C says unknown flags MUST be ignored, not rejected. Pin the
+        // contract so we don't accidentally tighten this in a refactor.
+        foreach (['00', '01', 'ff'] as $flags) {
+            $tracer = new Tracer($this->sink);
+            $this->assertTrue(
+                $tracer->startTrace('00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-' . $flags),
+                "flags byte {$flags} should be accepted",
+            );
+        }
+    }
+
+    public function testClosureFormPropagatesNullReturn(): void
+    {
+        $tracer = new Tracer($this->sink);
+        $value = $tracer->span('block.noop', [], static fn () => null);
+
+        $this->assertNull($value);
+        $this->assertCount(1, $this->sink->events);
+        $this->assertSame(Status::Success, $this->sink->events[0]->status);
+    }
 }

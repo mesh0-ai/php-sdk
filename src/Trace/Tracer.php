@@ -77,9 +77,14 @@ final class Tracer
      *
      * Must be called before the first {@see enter()} of the trace; later calls
      * are ignored and return `false`. Format:
-     * `00-<32 hex traceId>-<16 hex parentSpanId>-<2 hex flags>`.
+     * `00-<32 hex traceId>-<16 hex parentSpanId>-<2 hex flags>`. The flags byte
+     * is accepted as-is per W3C (unknown flags must be ignored, not rejected).
      *
-     * Returns `true` if the header was parsed and adopted.
+     * Returns `true` if the header was parsed and adopted. The adopted parent
+     * id is consumed by the next {@see enter()}; if no `enter()` follows (the
+     * request short-circuits), the next call to {@see reset()} clears it. In
+     * long-lived workers, always pair `startTrace()` with a `reset()` at the
+     * end of the request to avoid leaking the parent id into the next one.
      */
     public function startTrace(?string $traceparent = null): bool
     {
@@ -129,6 +134,13 @@ final class Tracer
     /**
      * Open a new span. The returned handle must be passed to {@see exit()} or
      * {@see exitWithException()} to close it.
+     *
+     * The `trace_id` is generated lazily on the first `enter()` and persists
+     * until {@see reset()} is called — consecutive root spans (siblings opened
+     * after the previous root has fully exited) share the same `trace_id` and
+     * appear as multiple parentless roots in one trace. Customers wanting one
+     * trace per logical execution must call `reset()` between them; long-lived
+     * workers (FrankenPHP, RoadRunner, Swoole) must do this anyway.
      *
      * @param array<string, mixed> $attributes
      */
@@ -235,10 +247,25 @@ final class Tracer
     ): void {
         // Pop until we find the handle. In well-formed code this is just the
         // top of the stack; we tolerate exit-out-of-order so a single missed
-        // exit further up does not wedge the rest of the trace.
+        // exit further up does not wedge the rest of the trace, but we warn
+        // because any frames above the match get dropped without their span
+        // events — that is silent data loss otherwise.
         $found = false;
-        for ($i = \count($this->stack) - 1; $i >= 0; --$i) {
+        $top = \count($this->stack) - 1;
+        for ($i = $top; $i >= 0; --$i) {
             if ($this->stack[$i] === $handle) {
+                if ($i < $top) {
+                    $dropped = [];
+                    for ($j = $i + 1; $j <= $top; ++$j) {
+                        $dropped[] = $this->stack[$j]->operation;
+                    }
+                    $this->logger->warning('mesh0 Tracer::exit closed a non-top span; dropping inner frames', [
+                        'closed_span' => $handle->operation,
+                        'dropped_count' => $top - $i,
+                        'dropped_operations' => $dropped,
+                        'trace_id' => $handle->traceId,
+                    ]);
+                }
                 $this->stack = \array_slice($this->stack, 0, $i);
                 $found = true;
                 break;
