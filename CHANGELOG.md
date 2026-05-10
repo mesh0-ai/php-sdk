@@ -4,6 +4,34 @@ All notable changes to `mesh0/sdk` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 3.0.0 - 2026-05-09
+
+The Tracer no longer has any magical attribute injection. Span name and
+error metadata are normal attributes on the same footing as everything
+else in `attributes` — the SDK does not write keys on the caller's
+behalf.
+
+### Removed
+- `Tracer::enter(string $operation, array $attributes)` →
+  `Tracer::enter(array $attributes)`. Pass `['span.name' => '...']`
+  yourself.
+- `Tracer::span(string $operation, array $attributes, callable $fn)` →
+  `Tracer::span(array $attributes, callable $fn)`.
+- `Tracer::exitWithException()` — redundant once it stopped injecting
+  `error.type` / `error.message`. On the manual error path, call
+  `exit($h, Status::Error, ['error.type' => ..., 'error.message' => ...])`.
+- `SpanHandle::$operation` field — no longer captured.
+- Auto-injection of `attributes["span.name"]` from the dropped
+  `operation` arg, and of `attributes["error.type"]` /
+  `attributes["error.message"]` on the error path. The closure form of
+  `span()` still flips status to `error` on throw, but adds no
+  attributes.
+
+### Changed
+- The "exit closed a non-top span" warning context now reports
+  `closed_span_id` and `dropped_span_ids` instead of operation names
+  (since operation no longer exists as a separate concept).
+
 ## 2.0.0 - 2026-05-09
 
 The `/v1/events` wire contract is now intentionally narrow: identity,

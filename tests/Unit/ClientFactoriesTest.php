@@ -57,7 +57,7 @@ final class ClientFactoriesTest extends TestCase
         $tracer = $client->tracer();
         $logger = $client->logger(bufferSize: 1, tracer: $tracer);
 
-        $h = $tracer->enter('block.execute');
+        $h = $tracer->enter(['span.name' => 'block.execute']);
         $this->mock->queueJson(200, ['accepted' => 1]);
         $logger->info('inside the span');
         $tracer->exit($h);

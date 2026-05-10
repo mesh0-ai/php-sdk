@@ -17,16 +17,19 @@ use Throwable;
  * span to a sink as an independent event.
  *
  * Each span produces exactly one event on `exit()`, carrying `trace_id`,
- * `span_id`, `parent_span_id`, `duration_ms`, and `status`. The span's
- * operation name is written to `attributes["span.name"]` to mirror the
- * OTLP path documented in DATA_MODEL.md. Errors land as
- * `attributes["error.type"]` and `attributes["error.message"]`.
+ * `span_id`, `parent_span_id`, `duration_ms`, and `status`. Everything
+ * else is just attributes — the Tracer never injects keys on the
+ * caller's behalf. By convention (per DATA_MODEL.md) callers set
+ * `attributes["span.name"]`, and on the error path
+ * `attributes["error.type"]` / `attributes["error.message"]`, but these
+ * are normal attribute keys with no special handling here.
  *
- * Closure form (recommended — exception-safe):
+ * Closure form (recommended — exception-safe; sets `status=error` on
+ * throw, no attributes are added):
  *
  * ```php
- * $result = $tracer->span('block.if', ['block_id' => 'b_123'], function () use ($tracer) {
- *     return $tracer->span('block.http_request', ['url' => $url], fn () => $client->get($url));
+ * $result = $tracer->span(['span.name' => 'block.if', 'block_id' => 'b_123'], function () use ($tracer) {
+ *     return $tracer->span(['span.name' => 'block.http_request', 'url' => $url], fn () => $client->get($url));
  * });
  * ```
  *
@@ -34,12 +37,15 @@ use Throwable;
  * resume across stack frames):
  *
  * ```php
- * $h = $tracer->enter('block.loop', ['block_id' => 'b_456']);
+ * $h = $tracer->enter(['span.name' => 'block.loop', 'block_id' => 'b_456']);
  * try {
  *     // run block
  *     $tracer->exit($h, attributes: ['iterations' => $n]);
  * } catch (\Throwable $e) {
- *     $tracer->exitWithException($h, $e);
+ *     $tracer->exit($h, Status::Error, [
+ *         'error.type' => $e::class,
+ *         'error.message' => $e->getMessage(),
+ *     ]);
  *     throw $e;
  * }
  * ```
@@ -131,8 +137,8 @@ final class Tracer
     }
 
     /**
-     * Open a new span. The returned handle must be passed to {@see exit()} or
-     * {@see exitWithException()} to close it.
+     * Open a new span. The returned handle must be passed to {@see exit()}
+     * to close it.
      *
      * The `trace_id` is generated lazily on the first `enter()` and persists
      * until {@see reset()} is called — consecutive root spans (siblings opened
@@ -143,7 +149,7 @@ final class Tracer
      *
      * @param array<string, mixed> $attributes
      */
-    public function enter(string $operation, array $attributes = []): SpanHandle
+    public function enter(array $attributes = []): SpanHandle
     {
         $traceId = $this->traceId ??= self::generateTraceId();
         $spanId = self::generateSpanId();
@@ -162,7 +168,6 @@ final class Tracer
             traceId: $traceId,
             spanId: $spanId,
             parentSpanId: $parentSpanId,
-            operation: $operation,
             startedAt: new DateTimeImmutable(),
             startedHrTimeNs: \hrtime(true),
             attributes: $attributes,
@@ -172,50 +177,107 @@ final class Tracer
     }
 
     /**
-     * Close a span on the success path.
+     * Close a span. Caller-supplied `$attributes` are merged on top of the
+     * attributes passed to {@see enter()}.
      *
-     * @param array<string, mixed> $attributes Merged on top of the attributes passed to {@see enter()}.
+     * @param array<string, mixed> $attributes
      */
     public function exit(
         SpanHandle $handle,
         Status $status = Status::Success,
         array $attributes = [],
     ): void {
-        $this->finish($handle, $status, $attributes, null, null);
-    }
+        // Pop until we find the handle. In well-formed code this is just the
+        // top of the stack; we tolerate exit-out-of-order so a single missed
+        // exit further up does not wedge the rest of the trace, but we warn
+        // because any frames above the match get dropped without their span
+        // events — that is silent data loss otherwise.
+        $found = false;
+        $top = \count($this->stack) - 1;
+        for ($i = $top; $i >= 0; --$i) {
+            if ($this->stack[$i] === $handle) {
+                if ($i < $top) {
+                    $dropped = [];
+                    for ($j = $i + 1; $j <= $top; ++$j) {
+                        $dropped[] = $this->stack[$j]->spanId;
+                    }
+                    $this->logger->warning('mesh0 Tracer::exit closed a non-top span; dropping inner frames', [
+                        'closed_span_id' => $handle->spanId,
+                        'dropped_count' => $top - $i,
+                        'dropped_span_ids' => $dropped,
+                        'trace_id' => $handle->traceId,
+                    ]);
+                }
+                $this->stack = \array_slice($this->stack, 0, $i);
+                $found = true;
+                break;
+            }
+        }
+        if (!$found) {
+            // Double-exit, exit on a stale handle from a previous request, or
+            // exit on a handle from a different Tracer instance. The span event
+            // is dropped — make the misuse traceable so the pattern is visible
+            // in long-lived workers.
+            $this->logger->warning('mesh0 Tracer::exit called with unknown span; ignoring', [
+                'span_id' => $handle->spanId,
+                'trace_id' => $handle->traceId,
+                'started_at' => $handle->startedAt->format('Y-m-d\\TH:i:s.v\\Z'),
+                'duration_ms' => (\hrtime(true) - $handle->startedHrTimeNs) / 1_000_000.0,
+            ]);
+            return;
+        }
 
-    /**
-     * Close a span on the error path, capturing the exception type and
-     * message into `attributes["error.type"]` / `attributes["error.message"]`.
-     *
-     * @param array<string, mixed> $attributes Merged on top of the attributes passed to {@see enter()}.
-     */
-    public function exitWithException(SpanHandle $handle, Throwable $e, array $attributes = []): void
-    {
-        $this->finish($handle, Status::Error, $attributes, $e::class, $e->getMessage());
+        $durationMs = (\hrtime(true) - $handle->startedHrTimeNs) / 1_000_000.0;
+        $merged = \array_merge($handle->attributes, $attributes);
+
+        $builder = (new EventBuilder($handle->startedAt))
+            ->withTraceId($handle->traceId)
+            ->withSpan($handle->spanId, $handle->parentSpanId)
+            ->withDurationMs($durationMs)
+            ->withStatus($status);
+        if ($merged !== []) {
+            $builder = $builder->withAttributes($merged);
+        }
+
+        try {
+            $this->sink->send($builder);
+        } catch (Throwable $e) {
+            // The stack invariant is the load-bearing thing — once we've popped
+            // the handle, we cannot let a sink failure unwind out of exit()
+            // and corrupt outer spans. Surface the loss instead.
+            $this->logger->error('mesh0 Tracer sink send failed; span event lost', [
+                'exception' => $e,
+                'trace_id' => $handle->traceId,
+                'span_id' => $handle->spanId,
+            ]);
+        }
     }
 
     /**
      * Run `$fn` inside a new span. The span exits with `success` if `$fn`
      * returns, or `error` if it throws (the exception is re-thrown).
      *
+     * No attributes are added on the error path — if you want
+     * `error.type` / `error.message` recorded, use the manual form
+     * ({@see enter()} + {@see exit()}) and pass them yourself.
+     *
      * @template T
      * @param array<string, mixed> $attributes
      * @param callable(): T $fn
      * @return T
      */
-    public function span(string $operation, array $attributes, callable $fn): mixed
+    public function span(array $attributes, callable $fn): mixed
     {
-        $h = $this->enter($operation, $attributes);
+        $h = $this->enter($attributes);
         try {
             $result = $fn();
         } catch (Throwable $e) {
             // Don't let a throwing exit() mask the original — the span is
             // best-effort, the user code's exception is the real story.
             try {
-                $this->exitWithException($h, $e);
+                $this->exit($h, Status::Error);
             } catch (Throwable $exitErr) {
-                $this->logger->error('mesh0 Tracer::exitWithException failed; span event lost', [
+                $this->logger->error('mesh0 Tracer::exit failed; span event lost', [
                     'exception' => $exitErr,
                     'trace_id' => $h->traceId,
                     'span_id' => $h->spanId,
@@ -251,89 +313,6 @@ final class Tracer
         $this->stack = [];
         $this->traceId = null;
         $this->incomingParent = null;
-    }
-
-    /**
-     * @param array<string, mixed> $extraAttributes
-     */
-    private function finish(
-        SpanHandle $handle,
-        Status $status,
-        array $extraAttributes,
-        ?string $errorType,
-        ?string $errorMessage,
-    ): void {
-        // Pop until we find the handle. In well-formed code this is just the
-        // top of the stack; we tolerate exit-out-of-order so a single missed
-        // exit further up does not wedge the rest of the trace, but we warn
-        // because any frames above the match get dropped without their span
-        // events — that is silent data loss otherwise.
-        $found = false;
-        $top = \count($this->stack) - 1;
-        for ($i = $top; $i >= 0; --$i) {
-            if ($this->stack[$i] === $handle) {
-                if ($i < $top) {
-                    $dropped = [];
-                    for ($j = $i + 1; $j <= $top; ++$j) {
-                        $dropped[] = $this->stack[$j]->operation;
-                    }
-                    $this->logger->warning('mesh0 Tracer::exit closed a non-top span; dropping inner frames', [
-                        'closed_span' => $handle->operation,
-                        'dropped_count' => $top - $i,
-                        'dropped_operations' => $dropped,
-                        'trace_id' => $handle->traceId,
-                    ]);
-                }
-                $this->stack = \array_slice($this->stack, 0, $i);
-                $found = true;
-                break;
-            }
-        }
-        if (!$found) {
-            // Double-exit, exit on a stale handle from a previous request, or
-            // exit on a handle from a different Tracer instance. The span event
-            // is dropped — make the misuse traceable so the pattern is visible
-            // in long-lived workers.
-            $this->logger->warning('mesh0 Tracer::exit called with unknown span; ignoring', [
-                'span_id' => $handle->spanId,
-                'trace_id' => $handle->traceId,
-                'operation' => $handle->operation,
-                'started_at' => $handle->startedAt->format('Y-m-d\\TH:i:s.v\\Z'),
-                'duration_ms' => (\hrtime(true) - $handle->startedHrTimeNs) / 1_000_000.0,
-            ]);
-            return;
-        }
-
-        $durationMs = (\hrtime(true) - $handle->startedHrTimeNs) / 1_000_000.0;
-        $attributes = \array_merge($handle->attributes, $extraAttributes);
-        $attributes['span.name'] = $handle->operation;
-        if ($errorType !== null) {
-            $attributes['error.type'] = $errorType;
-        }
-        if ($errorMessage !== null) {
-            $attributes['error.message'] = $errorMessage;
-        }
-
-        $builder = (new EventBuilder($handle->startedAt))
-            ->withTraceId($handle->traceId)
-            ->withSpan($handle->spanId, $handle->parentSpanId)
-            ->withDurationMs($durationMs)
-            ->withStatus($status)
-            ->withAttributes($attributes);
-
-        try {
-            $this->sink->send($builder);
-        } catch (Throwable $e) {
-            // The stack invariant is the load-bearing thing — once we've popped
-            // the handle, we cannot let a sink failure unwind out of finish()
-            // and corrupt outer spans. Surface the loss instead.
-            $this->logger->error('mesh0 Tracer sink send failed; span event lost', [
-                'exception' => $e,
-                'trace_id' => $handle->traceId,
-                'span_id' => $handle->spanId,
-                'operation' => $handle->operation,
-            ]);
-        }
     }
 
     private static function generateTraceId(): string

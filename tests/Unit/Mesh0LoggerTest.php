@@ -116,7 +116,7 @@ final class Mesh0LoggerTest extends TestCase
         $tracer = new Tracer(new InMemoryEventSink());
         $logger = new Mesh0Logger(client: $this->client, bufferSize: 1, tracer: $tracer);
 
-        $h = $tracer->enter('block.execute');
+        $h = $tracer->enter(['span.name' => 'block.execute']);
         $this->mock->queueJson(200, ['accepted' => 1]);
         $logger->info('inside the span');
 
@@ -132,7 +132,7 @@ final class Mesh0LoggerTest extends TestCase
         $tracer = new Tracer(new InMemoryEventSink());
         $logger = new Mesh0Logger(client: $this->client, bufferSize: 1, tracer: $tracer);
 
-        $h = $tracer->enter('block.execute');
+        $h = $tracer->enter(['span.name' => 'block.execute']);
         $this->mock->queueJson(200, ['accepted' => 1]);
         $logger->info('explicit override', ['trace_id' => 'tr-explicit', 'span_id' => 'sp-explicit']);
 

@@ -25,7 +25,7 @@ final class TracerTest extends TestCase
     {
         $tracer = new Tracer($this->sink);
 
-        $h = $tracer->enter('block.execute', ['block_id' => 'b_1']);
+        $h = $tracer->enter(['span.name' => 'block.execute', 'block_id' => 'b_1']);
         $tracer->exit($h);
 
         $this->assertCount(1, $this->sink->events);
@@ -47,9 +47,9 @@ final class TracerTest extends TestCase
     {
         $tracer = new Tracer($this->sink);
 
-        $a = $tracer->enter('block.if');
-        $b = $tracer->enter('block.http_request');
-        $c = $tracer->enter('block.db_query');
+        $a = $tracer->enter(['span.name' => 'block.if']);
+        $b = $tracer->enter(['span.name' => 'block.http_request']);
+        $c = $tracer->enter(['span.name' => 'block.db_query']);
         $tracer->exit($c);
         $tracer->exit($b);
         $tracer->exit($a);
@@ -76,8 +76,8 @@ final class TracerTest extends TestCase
         // Regression guard: verify we never bundle multiple spans into one
         // event/payload — every span goes out as its own send() call.
         $tracer = new Tracer($this->sink);
-        $h1 = $tracer->enter('a');
-        $h2 = $tracer->enter('b');
+        $h1 = $tracer->enter(['span.name' => 'a']);
+        $h2 = $tracer->enter(['span.name' => 'b']);
         $tracer->exit($h2);
         $tracer->exit($h1);
         $this->assertCount(2, $this->sink->events);
@@ -87,20 +87,20 @@ final class TracerTest extends TestCase
     {
         $tracer = new Tracer($this->sink);
 
-        $value = $tracer->span('block.compute', ['n' => 3], static fn (): int => 42);
+        $value = $tracer->span(['span.name' => 'block.compute', 'n' => 3], static fn (): int => 42);
 
         $this->assertSame(42, $value);
         $this->assertCount(1, $this->sink->events);
         $this->assertSame(Status::Success, $this->sink->events[0]->status);
     }
 
-    public function testClosureFormRethrowsAndEmitsErrorSpan(): void
+    public function testClosureFormRethrowsAndEmitsErrorSpanWithoutInjectingAttrs(): void
     {
         $tracer = new Tracer($this->sink);
 
         $thrown = null;
         try {
-            $tracer->span('block.compute', [], static function (): void {
+            $tracer->span(['span.name' => 'block.compute'], static function (): void {
                 throw new RuntimeException('boom');
             });
         } catch (\Throwable $e) {
@@ -112,6 +112,25 @@ final class TracerTest extends TestCase
         $event = $this->sink->events[0];
         $this->assertSame(Status::Error, $event->status);
         $this->assertNotNull($event->attributes);
+        // error.* is the caller's responsibility — closure form does not inject.
+        $this->assertArrayNotHasKey('error.type', $event->attributes);
+        $this->assertArrayNotHasKey('error.message', $event->attributes);
+        $this->assertSame('block.compute', $event->attributes['span.name']);
+    }
+
+    public function testManualErrorPathCanCarryErrorAttributes(): void
+    {
+        $tracer = new Tracer($this->sink);
+
+        $h = $tracer->enter(['span.name' => 'block.compute']);
+        $tracer->exit($h, Status::Error, [
+            'error.type' => RuntimeException::class,
+            'error.message' => 'boom',
+        ]);
+
+        $event = $this->sink->events[0];
+        $this->assertSame(Status::Error, $event->status);
+        $this->assertNotNull($event->attributes);
         $this->assertSame(RuntimeException::class, $event->attributes['error.type']);
         $this->assertSame('boom', $event->attributes['error.message']);
     }
@@ -120,9 +139,9 @@ final class TracerTest extends TestCase
     {
         $tracer = new Tracer($this->sink);
 
-        $parent = $tracer->enter('block.if');
+        $parent = $tracer->enter(['span.name' => 'block.if']);
         try {
-            $tracer->span('block.bad', [], static function (): void {
+            $tracer->span(['span.name' => 'block.bad'], static function (): void {
                 throw new RuntimeException('child failed');
             });
         } catch (\Throwable) {
@@ -147,7 +166,7 @@ final class TracerTest extends TestCase
         $traceparent = '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01';
         $this->assertTrue($tracer->startTrace($traceparent));
 
-        $h = $tracer->enter('root');
+        $h = $tracer->enter(['span.name' => 'root']);
         $tracer->exit($h);
 
         $event = $this->sink->events[0];
@@ -170,7 +189,7 @@ final class TracerTest extends TestCase
     public function testStartTraceIgnoredOnceTraceStarted(): void
     {
         $tracer = new Tracer($this->sink);
-        $h = $tracer->enter('root');
+        $h = $tracer->enter(['span.name' => 'root']);
         $this->assertFalse($tracer->startTrace('00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01'));
         $tracer->exit($h);
     }
@@ -179,7 +198,7 @@ final class TracerTest extends TestCase
     {
         $tracer = new Tracer($this->sink);
 
-        $h = $tracer->enter('block.loop', ['block_id' => 'b_1', 'iterations' => 0]);
+        $h = $tracer->enter(['span.name' => 'block.loop', 'block_id' => 'b_1', 'iterations' => 0]);
         $tracer->exit($h, attributes: ['iterations' => 7, 'completed' => true]);
 
         $event = $this->sink->events[0];
@@ -190,6 +209,18 @@ final class TracerTest extends TestCase
         $this->assertSame('block.loop', $event->attributes['span.name']);
     }
 
+    public function testEnterWithoutAttributesProducesNoAttributes(): void
+    {
+        // No magic injection — if the caller passes nothing, the event has
+        // no attributes at all.
+        $tracer = new Tracer($this->sink);
+        $h = $tracer->enter();
+        $tracer->exit($h);
+
+        $event = $this->sink->events[0];
+        $this->assertNull($event->attributes);
+    }
+
     public function testCurrentTraceAndSpanIdReflectStack(): void
     {
         $tracer = new Tracer($this->sink);
@@ -197,7 +228,7 @@ final class TracerTest extends TestCase
         $this->assertNull($tracer->currentSpanId());
         $this->assertFalse($tracer->hasOpenSpan());
 
-        $h = $tracer->enter('a');
+        $h = $tracer->enter(['span.name' => 'a']);
         $this->assertNotNull($tracer->currentTraceId());
         $this->assertSame($h->spanId, $tracer->currentSpanId());
         $this->assertTrue($tracer->hasOpenSpan());
@@ -211,8 +242,8 @@ final class TracerTest extends TestCase
         $logger = new RecordingLogger();
         $tracer = new Tracer($this->sink, logger: $logger);
 
-        $tracer->enter('a');
-        $tracer->enter('b');
+        $tracer->enter(['span.name' => 'a']);
+        $tracer->enter(['span.name' => 'b']);
         $tracer->reset();
 
         $this->assertNull($tracer->currentTraceId());
@@ -240,8 +271,8 @@ final class TracerTest extends TestCase
     {
         $tracer = new Tracer($this->sink);
 
-        $tracer->span('first', [], static fn () => null);
-        $tracer->span('second', [], static fn () => null);
+        $tracer->span(['span.name' => 'first'], static fn () => null);
+        $tracer->span(['span.name' => 'second'], static fn () => null);
 
         $this->assertCount(2, $this->sink->events);
         $this->assertSame(
@@ -253,7 +284,7 @@ final class TracerTest extends TestCase
     public function testDurationIsMeasuredFromHrTime(): void
     {
         $tracer = new Tracer($this->sink);
-        $h = $tracer->enter('slow');
+        $h = $tracer->enter(['span.name' => 'slow']);
         usleep(2_000); // 2ms
         $tracer->exit($h);
 
@@ -267,7 +298,7 @@ final class TracerTest extends TestCase
         $logger = new RecordingLogger();
         $tracer = new Tracer($this->sink, logger: $logger);
 
-        $h = $tracer->enter('real');
+        $h = $tracer->enter(['span.name' => 'real']);
         $tracer->exit($h);
         // Re-exit the same handle.
         $tracer->exit($h);
@@ -283,9 +314,9 @@ final class TracerTest extends TestCase
         $logger = new RecordingLogger();
         $tracer = new Tracer($this->sink, logger: $logger);
 
-        $a = $tracer->enter('outer');
-        $tracer->enter('middle');
-        $tracer->enter('inner');
+        $a = $tracer->enter(['span.name' => 'outer']);
+        $middle = $tracer->enter(['span.name' => 'middle']);
+        $inner = $tracer->enter(['span.name' => 'inner']);
 
         // Skip middle/inner exits — close the outer handle directly.
         $tracer->exit($a);
@@ -304,7 +335,7 @@ final class TracerTest extends TestCase
         ));
         $this->assertCount(1, $warnings);
         $this->assertSame(2, $warnings[0]['context']['dropped_count']);
-        $this->assertSame(['middle', 'inner'], $warnings[0]['context']['dropped_operations']);
+        $this->assertSame([$middle->spanId, $inner->spanId], $warnings[0]['context']['dropped_span_ids']);
     }
 
     public function testStartTraceAcceptsAnyFlagsByteAsW3CRequires(): void
@@ -323,7 +354,7 @@ final class TracerTest extends TestCase
     public function testClosureFormPropagatesNullReturn(): void
     {
         $tracer = new Tracer($this->sink);
-        $value = $tracer->span('block.noop', [], static fn () => null);
+        $value = $tracer->span(['span.name' => 'block.noop'], static fn () => null);
 
         $this->assertNull($value);
         $this->assertCount(1, $this->sink->events);
