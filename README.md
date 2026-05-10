@@ -308,20 +308,29 @@ of `span_id`s, and emits exactly one event per closed span through any
 $tracer = $mesh0->tracer();
 
 // Closure form — exception-safe, auto-pop, recommended:
-$result = $tracer->span('block.if', ['block_id' => 'b_123'], function () use ($tracer) {
-    return $tracer->span('block.http_request', ['url' => $url], fn () => $client->get($url));
+$result = $tracer->span(['span.name' => 'block.if', 'block_id' => 'b_123'], function () use ($tracer) {
+    return $tracer->span(['span.name' => 'block.http_request', 'url' => $url], fn () => $client->get($url));
 });
 
 // Manual form — when a closure doesn't fit (e.g. block dispatchers):
-$h = $tracer->enter('block.loop', ['block_id' => 'b_456']);
+$h = $tracer->enter(['span.name' => 'block.loop', 'block_id' => 'b_456']);
 try {
     // run block...
     $tracer->exit($h, attributes: ['iterations' => $n]);
 } catch (\Throwable $e) {
-    $tracer->exitWithException($h, $e);
+    $tracer->exit($h, Mesh0\Event\Status::Error, [
+        'error.type' => $e::class,
+        'error.message' => $e->getMessage(),
+    ]);
     throw $e;
 }
 ```
+
+The Tracer never injects attribute keys for you. By convention (per
+the mesh0 data model) callers set `attributes["span.name"]` and, on the
+error path, `attributes["error.type"]` / `attributes["error.message"]` —
+but those are normal attribute keys and the closure form leaves them
+to you (it sets `status=error` on throw, nothing more).
 
 Each `enter`/`exit` pair becomes one independent datagram on the way
 out; the metrics-agent forwards them verbatim and ClickHouse reassembles
@@ -352,7 +361,7 @@ $logger = $mesh0->logger(
     tracer: $tracer,
 );
 
-$tracer->span('block.http_request', [], function () use ($logger) {
+$tracer->span(['span.name' => 'block.http_request'], function () use ($logger) {
     $logger->info('calling upstream'); // trace_id / span_id stamped automatically
 });
 ```
