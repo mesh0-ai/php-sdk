@@ -305,8 +305,14 @@ final class TracerTest extends TestCase
 
         // First exit produced one event; the second was a no-op.
         $this->assertCount(1, $this->sink->events);
-        $warnings = array_filter($logger->records, static fn (array $r): bool => $r['level'] === 'warning');
+        $warnings = array_values(array_filter(
+            $logger->records,
+            static fn (array $r): bool => $r['level'] === 'warning',
+        ));
         $this->assertNotEmpty($warnings);
+        // Old "operation" key must not leak back in — the SDK does not promote
+        // user-convention keys into log context.
+        $this->assertArrayNotHasKey('operation', $warnings[0]['context']);
     }
 
     public function testExitingNonTopHandleEmitsThatSpanAndWarnsAboutDroppedFrames(): void
@@ -336,6 +342,10 @@ final class TracerTest extends TestCase
         $this->assertCount(1, $warnings);
         $this->assertSame(2, $warnings[0]['context']['dropped_count']);
         $this->assertSame([$middle->spanId, $inner->spanId], $warnings[0]['context']['dropped_span_ids']);
+        $this->assertSame($a->spanId, $warnings[0]['context']['closed_span_id']);
+        // Old keys that promoted user convention into log context must stay gone.
+        $this->assertArrayNotHasKey('closed_span', $warnings[0]['context']);
+        $this->assertArrayNotHasKey('dropped_operations', $warnings[0]['context']);
     }
 
     public function testStartTraceAcceptsAnyFlagsByteAsW3CRequires(): void
@@ -349,6 +359,60 @@ final class TracerTest extends TestCase
                 "flags byte {$flags} should be accepted",
             );
         }
+    }
+
+    public function testSpanWithoutSpanNameAttributeStillEmits(): void
+    {
+        // span.name is a user convention, not an SDK requirement. A caller
+        // that never sets it must still get a valid span event.
+        $tracer = new Tracer($this->sink);
+
+        $tracer->span(['block_id' => 'b_1'], static fn () => null);
+
+        $this->assertCount(1, $this->sink->events);
+        $event = $this->sink->events[0];
+        $this->assertNotNull($event->attributes);
+        $this->assertSame('b_1', $event->attributes['block_id']);
+        $this->assertArrayNotHasKey('span.name', $event->attributes);
+        $this->assertSame(Status::Success, $event->status);
+    }
+
+    public function testSinkFailureIsLoggedAndStackInvariantHolds(): void
+    {
+        // The stack must unwind cleanly even when the sink throws — otherwise
+        // a single failed send() corrupts every outer span. See the
+        // "load-bearing stack invariant" comment in Tracer::exit().
+        $throwingSink = new class () implements \Mesh0\Event\EventSink {
+            public int $sends = 0;
+
+            public function send(\Mesh0\Event\Event|\Mesh0\Event\EventBuilder $event): void
+            {
+                ++$this->sends;
+                throw new RuntimeException('sink down');
+            }
+        };
+        $logger = new RecordingLogger();
+        $tracer = new Tracer($throwingSink, logger: $logger);
+
+        $outer = $tracer->enter(['span.name' => 'outer']);
+        $inner = $tracer->enter(['span.name' => 'inner']);
+
+        // Inner exit triggers a send that throws — the stack must still pop.
+        $tracer->exit($inner);
+        $this->assertTrue($tracer->hasOpenSpan());
+        $this->assertSame($outer->spanId, $tracer->currentSpanId());
+
+        // Outer exit does the same, leaving the tracer fully drained.
+        $tracer->exit($outer);
+        $this->assertFalse($tracer->hasOpenSpan());
+
+        $this->assertSame(2, $throwingSink->sends);
+        $errors = array_values(array_filter(
+            $logger->records,
+            static fn (array $r): bool => $r['level'] === 'error',
+        ));
+        $this->assertCount(2, $errors);
+        $this->assertArrayNotHasKey('operation', $errors[0]['context']);
     }
 
     public function testClosureFormPropagatesNullReturn(): void
