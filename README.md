@@ -96,13 +96,14 @@ else is merged into `attributes`:
 | `trace_id`        | `trace_id`                     |
 | `span_id`         | `span_id`                      |
 | `parent_span_id`  | `parent_span_id`               |
-| `duration_ms`     | `duration_ms`                  |
 
-Plus: `exception` (Throwable) sets `status=error` and writes `error.type`
-and `error.message` into `attributes`. Severity ≥ `error` also sets
-`status=error`. The interpolated message and `log.level` always land in
-`attributes`. Records are buffered in memory and flushed on `flush()`,
-when the buffer fills, and on shutdown.
+Plus: `exception` (Throwable) writes `error.type` and `error.message`
+into `attributes`. The interpolated message and `log.level` always land
+in `attributes`. `status` and `duration_ms` are no longer special — pass
+them as ordinary context keys (`'status' => 'error'`,
+`'duration_ms' => 142`) and they land in `attributes` like everything
+else. Records are buffered in memory and flushed on `flush()`, when the
+buffer fills, and on shutdown.
 
 If you pass a [`Tracer`](#instrumenting-nested-operations-tracer) to
 `logger(...)`, log records emitted inside an active span pick up
@@ -162,12 +163,13 @@ new builder.
 ```php
 $mesh0->events->send(
     Event::now()
-        ->withDurationMs(820)
         ->withTraceId($traceId)
         ->withAttributes([
             'app.id'                       => 'agents',
             'app.environment'              => 'prod',
             'span.name'                    => 'agent.run',
+            'duration_ms'                  => 820,
+            'status'                       => 'success',
             'gen_ai.system'                => 'anthropic',
             'gen_ai.request.model'         => 'claude-opus-4-7',
             'gen_ai.usage.input_tokens'    => 1_240,
@@ -318,8 +320,9 @@ try {
     // run block...
     $tracer->exit($h, attributes: ['iterations' => $n]);
 } catch (\Throwable $e) {
-    $tracer->exit($h, Mesh0\Event\Status::Error, [
-        'error.type' => $e::class,
+    $tracer->exit($h, [
+        'status'        => 'error',
+        'error.type'    => $e::class,
         'error.message' => $e->getMessage(),
     ]);
     throw $e;
@@ -328,9 +331,12 @@ try {
 
 The Tracer never injects attribute keys for you. By convention (per
 the mesh0 data model) callers set `attributes["span.name"]` and, on the
-error path, `attributes["error.type"]` / `attributes["error.message"]` —
-but those are normal attribute keys and the closure form leaves them
-to you (it sets `status=error` on throw, nothing more).
+error path, `attributes["status"]` / `attributes["error.type"]` /
+`attributes["error.message"]` — these are normal attribute keys and the
+closure form of `span()` leaves them entirely to you. The Tracer also
+no longer auto-stamps a duration; if you want span wall time to be
+queryable, write it to `attributes["duration_ms"]` yourself before
+exit (or measure it in the manual form and pass it through).
 
 Each `enter`/`exit` pair becomes one independent datagram on the way
 out; the metrics-agent forwards them verbatim and ClickHouse reassembles
@@ -371,11 +377,11 @@ $tracer->span(['span.name' => 'block.http_request'], function () use ($logger) {
 ## Querying
 
 ```php
-// Only `timestamp, duration_ms, project_id, status, trace_id, span_id,
-// parent_span_id` are TQL builtins. Anything else (e.g. `span.name` or
-// other `attributes` keys) must be exposed via a per-project alias or
-// promoted column — set those up in the dashboard, then reference them
-// by their alias name here.
+// Only the identity/time TQL builtins resolve at the top level:
+// `timestamp, project.id, trace.id, span.id, parent_span.id`. Anything
+// else (status, duration_ms, span.name, gen_ai.*, …) must be exposed via
+// a per-project alias or promoted column — set those up in the dashboard,
+// then reference them by their alias name here.
 $rows = $mesh0->query->run([
     'from'    => 'events',
     'select'  => ['status', 'count()'],

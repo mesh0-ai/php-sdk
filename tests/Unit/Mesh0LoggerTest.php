@@ -50,8 +50,7 @@ final class Mesh0LoggerTest extends TestCase
 
         $this->assertCount(1, $this->mock->requests);
         $event = $this->mock->lastEvent();
-        // Non-error levels do not stamp a status — keeps `status=success`
-        // dashboards from being polluted by debug/info chatter.
+        // status is not a wire field anymore — confirm nothing leaks top-level.
         $this->assertArrayNotHasKey('status', $event);
         $attributes = $event['attributes'];
         $this->assertIsArray($attributes);
@@ -70,7 +69,8 @@ final class Mesh0LoggerTest extends TestCase
         $logger->error('charge failed', ['exception' => new \RuntimeException('boom'), 'order_id' => 'ord_1']);
 
         $event = $this->mock->lastEvent();
-        $this->assertSame('error', $event['status']);
+        // status is not a wire field — error semantics live in error.* attrs.
+        $this->assertArrayNotHasKey('status', $event);
         $attributes = $event['attributes'];
         $this->assertIsArray($attributes);
         $this->assertSame('RuntimeException', $attributes['error.type']);
@@ -97,18 +97,19 @@ final class Mesh0LoggerTest extends TestCase
         $this->assertSame('tr-1', $event['trace_id']);
         $this->assertSame('sp-1', $event['span_id']);
         $this->assertSame('sp-0', $event['parent_span_id']);
-        $this->assertSame(12.5, $event['duration_ms']);
+        // duration_ms is no longer a wire field — must not leak top-level.
+        $this->assertArrayNotHasKey('duration_ms', $event);
 
         $attributes = $event['attributes'];
         $this->assertIsArray($attributes);
-        // user_id/session_id aren't wire fields anymore — they ride in attributes.
+        // user_id/session_id/duration_ms aren't wire fields — they ride in attributes.
         $this->assertSame('u-1', $attributes['user_id']);
         $this->assertSame('s-1', $attributes['session_id']);
+        $this->assertSame(12.5, $attributes['duration_ms']);
         // The lifted wire-shape keys must not also leak into attributes.
         $this->assertArrayNotHasKey('trace_id', $attributes);
         $this->assertArrayNotHasKey('span_id', $attributes);
         $this->assertArrayNotHasKey('parent_span_id', $attributes);
-        $this->assertArrayNotHasKey('duration_ms', $attributes);
     }
 
     public function testTracerProvidesTraceContextWhenAbsentFromCallerContext(): void
@@ -221,17 +222,15 @@ final class Mesh0LoggerTest extends TestCase
         $this->mock->queueJson(200, ['accepted' => 1]);
         $logger->info('typed wrong', [
             'trace_id' => 12345,           // expected non-empty string
-            'duration_ms' => 'fast',       // expected int|float
             'exception' => 'oops',         // expected Throwable
         ]);
 
         $event = $this->mock->lastEvent();
-        // None of the malformed reserved keys made it onto the wire.
+        // The malformed reserved key did not land top-level.
         $this->assertArrayNotHasKey('trace_id', $event);
-        $this->assertArrayNotHasKey('duration_ms', $event);
 
         $warnings = $fallback->recordsAt('warning');
-        $this->assertGreaterThanOrEqual(3, count($warnings));
+        $this->assertGreaterThanOrEqual(2, count($warnings));
     }
 
     public function testParentSpanIdWithoutSpanIdIsDroppedAndWarned(): void
@@ -286,12 +285,11 @@ final class Mesh0LoggerTest extends TestCase
         $logger->info('not really an exception', ['exception' => 'boom']);
 
         $event = $this->mock->lastEvent();
-        // No error.* attributes promoted; non-error level so no status either.
+        // No error.* attributes promoted.
         $attributes = $event['attributes'];
         $this->assertIsArray($attributes);
         $this->assertArrayNotHasKey('error.type', $attributes);
         $this->assertArrayNotHasKey('error.message', $attributes);
-        $this->assertArrayNotHasKey('status', $event);
 
         $warnings = $fallback->recordsAt('warning');
         $this->assertNotEmpty($warnings);

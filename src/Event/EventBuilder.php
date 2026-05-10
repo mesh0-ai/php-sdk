@@ -12,12 +12,12 @@ use InvalidArgumentException;
  *
  * Each `with*` method returns a new builder, so the builder is safe to
  * share and reuse — no hidden mutation. Surface mirrors the wire shape:
- * identity (event/trace/span ids), time/duration, status, plus the two
- * open bins (`attributes`, `data`). Anything outside this surface
- * (model/usage tags, user identity, environment, operation name, error
- * metadata, etc.) belongs in `attributes` (queryable) or `data`
- * (opaque). Pick keys that match your project's TQL aliases / promoted
- * fields.
+ * identity (event/trace/span ids), time, plus the two open bins
+ * (`attributes`, `data`). Anything outside this surface — status,
+ * duration_ms, model/usage tags, user identity, environment, operation
+ * name, error metadata, etc. — belongs in `attributes` (queryable) or
+ * `data` (opaque). Pick keys that match your project's TQL aliases /
+ * promoted fields.
  *
  * The builder is set-only: `with*` methods accept non-null values and
  * accumulate state. There is currently no way to clear a previously-set
@@ -33,11 +33,9 @@ final readonly class EventBuilder
     public function __construct(
         private DateTimeInterface $timestamp,
         private ?string $eventId = null,
-        private ?float $durationMs = null,
         private ?string $traceId = null,
         private ?string $spanId = null,
         private ?string $parentSpanId = null,
-        private ?Status $status = null,
         private ?array $attributes = null,
         private ?array $data = null,
     ) {
@@ -47,17 +45,6 @@ final readonly class EventBuilder
     {
         self::requireNonEmpty('event_id', $id);
         return $this->copy(eventId: $id);
-    }
-
-    public function withDurationMs(float $durationMs): self
-    {
-        if ($durationMs < 0.0 || !is_finite($durationMs)) {
-            throw new InvalidArgumentException(sprintf(
-                'duration_ms must be a finite, non-negative number; got %s',
-                var_export($durationMs, true),
-            ));
-        }
-        return $this->copy(durationMs: $durationMs);
     }
 
     public function withTraceId(string $traceId): self
@@ -73,11 +60,6 @@ final readonly class EventBuilder
             self::requireNonEmpty('parent_span_id', $parentSpanId);
         }
         return $this->copy(spanId: $spanId, parentSpanId: $parentSpanId);
-    }
-
-    public function withStatus(Status $status): self
-    {
-        return $this->copy(status: $status);
     }
 
     /** @param array<string, mixed> $attributes */
@@ -103,11 +85,9 @@ final readonly class EventBuilder
         return new Event(
             timestamp: $this->timestamp,
             eventId: $this->eventId,
-            durationMs: $this->durationMs,
             traceId: $this->traceId,
             spanId: $this->spanId,
             parentSpanId: $this->parentSpanId,
-            status: $this->status,
             attributes: $this->attributes,
             data: $this->data,
         );
@@ -131,22 +111,18 @@ final readonly class EventBuilder
     private function copy(
         ?DateTimeInterface $timestamp = null,
         ?string $eventId = null,
-        ?float $durationMs = null,
         ?string $traceId = null,
         ?string $spanId = null,
         ?string $parentSpanId = null,
-        ?Status $status = null,
         ?array $attributes = null,
         ?array $data = null,
     ): self {
         return new self(
             timestamp: $timestamp ?? $this->timestamp,
             eventId: $eventId ?? $this->eventId,
-            durationMs: $durationMs ?? $this->durationMs,
             traceId: $traceId ?? $this->traceId,
             spanId: $spanId ?? $this->spanId,
             parentSpanId: $parentSpanId ?? $this->parentSpanId,
-            status: $status ?? $this->status,
             attributes: $attributes ?? $this->attributes,
             data: $data ?? $this->data,
         );

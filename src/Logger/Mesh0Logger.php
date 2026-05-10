@@ -6,7 +6,6 @@ namespace Mesh0\Logger;
 
 use Mesh0\Client;
 use Mesh0\Event\Event;
-use Mesh0\Event\Status;
 use Mesh0\Trace\Tracer;
 use Psr\Log\AbstractLogger;
 use Psr\Log\InvalidArgumentException;
@@ -39,20 +38,19 @@ use Throwable;
  *
  * - `event_id`                                 → top-level `event_id`
  * - `trace_id`, `span_id`, `parent_span_id`    → trace correlation
- * - `duration_ms`                              → top-level `duration_ms`
  *
  * `parent_span_id` is only emitted when `span_id` is also present —
  * a parent without a self-span is meaningless on the wire.
  *
- * Status is `error` if an `exception` is supplied or the level is
- * `error` or higher; otherwise it is left unset (so dashboards
- * filtering for `status=success` aren't polluted by debug/info logs).
- *
  * The `defaults` map and any non-reserved context keys are merged into
  * `attributes`. Per-call context wins over `defaults`. Conventional
- * keys used: `log.level`, `message`, and (when an exception is
- * supplied) `error.type` / `error.message`. These four are written
- * last and will overwrite same-named entries from caller context.
+ * keys written by the logger: `log.level`, `message`, and (when an
+ * exception is supplied) `error.type` / `error.message`. These four
+ * are written last and will overwrite same-named entries from caller
+ * context. Note: status / duration_ms are no longer special — pass
+ * them as ordinary context entries (e.g. `'status' => 'error'`,
+ * `'duration_ms' => 142`) and they'll land in `attributes` like
+ * everything else.
  */
 final class Mesh0Logger extends AbstractLogger
 {
@@ -74,7 +72,6 @@ final class Mesh0Logger extends AbstractLogger
         'trace_id',
         'span_id',
         'parent_span_id',
-        'duration_ms',
         'exception',
     ];
 
@@ -163,15 +160,6 @@ final class Mesh0Logger extends AbstractLogger
             $spanId ??= $this->tracer->currentSpanId();
         }
 
-        $duration = $context['duration_ms'] ?? null;
-        $durationMs = is_int($duration) || is_float($duration) ? (float) $duration : null;
-        if ($duration !== null && $durationMs === null) {
-            $this->fallback->warning('mesh0 logger: dropping malformed duration_ms', [
-                'expected' => 'int|float',
-                'got' => get_debug_type($duration),
-            ]);
-        }
-
         $rawException = $context['exception'] ?? null;
         $exception = $rawException instanceof Throwable ? $rawException : null;
         if ($rawException !== null && $exception === null) {
@@ -180,8 +168,6 @@ final class Mesh0Logger extends AbstractLogger
                 'got' => get_debug_type($rawException),
             ]);
         }
-        $isError = $exception !== null
-            || self::LEVEL_RANK[$level] >= self::LEVEL_RANK[LogLevel::ERROR];
 
         $attributes = $this->defaults;
         foreach ($context as $key => $value) {
@@ -198,9 +184,6 @@ final class Mesh0Logger extends AbstractLogger
         }
 
         $builder = Event::now()->withAttributes($attributes);
-        if ($isError) {
-            $builder = $builder->withStatus(Status::Error);
-        }
 
         if ($eventId !== null) {
             $builder = $builder->withEventId($eventId);
@@ -216,9 +199,6 @@ final class Mesh0Logger extends AbstractLogger
             $this->fallback->warning('mesh0 logger: dropping parent_span_id with no span_id', [
                 'parent_span_id' => $parentSpanId,
             ]);
-        }
-        if ($durationMs !== null) {
-            $builder = $builder->withDurationMs($durationMs);
         }
 
         return $builder->build();

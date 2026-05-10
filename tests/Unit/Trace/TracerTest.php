@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Mesh0\Tests\Unit\Trace;
 
-use Mesh0\Event\Status;
 use Mesh0\Tests\Support\InMemoryEventSink;
 use Mesh0\Tests\Support\RecordingLogger;
 use Mesh0\Trace\Tracer;
@@ -38,10 +37,7 @@ final class TracerTest extends TestCase
         $this->assertNotNull($event->attributes);
         $this->assertSame('block.execute', $event->attributes['span.name']);
         $this->assertSame('b_1', $event->attributes['block_id']);
-        $this->assertSame(Status::Success, $event->status);
-        $this->assertNotNull($event->durationMs);
-        $this->assertGreaterThanOrEqual(0.0, $event->durationMs);
-    }
+                            }
 
     public function testNestedSpansShareTraceIdAndChainParents(): void
     {
@@ -91,8 +87,7 @@ final class TracerTest extends TestCase
 
         $this->assertSame(42, $value);
         $this->assertCount(1, $this->sink->events);
-        $this->assertSame(Status::Success, $this->sink->events[0]->status);
-    }
+            }
 
     public function testClosureFormRethrowsAndEmitsErrorSpanWithoutInjectingAttrs(): void
     {
@@ -110,8 +105,7 @@ final class TracerTest extends TestCase
         $this->assertInstanceOf(RuntimeException::class, $thrown);
         $this->assertCount(1, $this->sink->events);
         $event = $this->sink->events[0];
-        $this->assertSame(Status::Error, $event->status);
-        $this->assertNotNull($event->attributes);
+                $this->assertNotNull($event->attributes);
         // error.* is the caller's responsibility — closure form does not inject.
         $this->assertArrayNotHasKey('error.type', $event->attributes);
         $this->assertArrayNotHasKey('error.message', $event->attributes);
@@ -123,14 +117,15 @@ final class TracerTest extends TestCase
         $tracer = new Tracer($this->sink);
 
         $h = $tracer->enter(['span.name' => 'block.compute']);
-        $tracer->exit($h, Status::Error, [
-            'error.type' => RuntimeException::class,
+        $tracer->exit($h, [
+            'status'        => 'error',
+            'error.type'    => RuntimeException::class,
             'error.message' => 'boom',
         ]);
 
         $event = $this->sink->events[0];
-        $this->assertSame(Status::Error, $event->status);
         $this->assertNotNull($event->attributes);
+        $this->assertSame('error', $event->attributes['status']);
         $this->assertSame(RuntimeException::class, $event->attributes['error.type']);
         $this->assertSame('boom', $event->attributes['error.message']);
     }
@@ -153,9 +148,7 @@ final class TracerTest extends TestCase
         $childEvent = $this->sink->events[0];
         $parentEvent = $this->sink->events[1];
 
-        $this->assertSame(Status::Error, $childEvent->status);
-        $this->assertSame(Status::Success, $parentEvent->status);
-        $this->assertSame($parentEvent->spanId, $childEvent->parentSpanId);
+                        $this->assertSame($parentEvent->spanId, $childEvent->parentSpanId);
         $this->assertSame($parentEvent->traceId, $childEvent->traceId);
     }
 
@@ -281,17 +274,6 @@ final class TracerTest extends TestCase
         );
     }
 
-    public function testDurationIsMeasuredFromHrTime(): void
-    {
-        $tracer = new Tracer($this->sink);
-        $h = $tracer->enter(['span.name' => 'slow']);
-        usleep(2_000); // 2ms
-        $tracer->exit($h);
-
-        $event = $this->sink->events[0];
-        $this->assertNotNull($event->durationMs);
-        $this->assertGreaterThanOrEqual(1.0, $event->durationMs);
-    }
 
     public function testUnknownHandleOnExitIsLoggedAndIgnored(): void
     {
@@ -374,8 +356,7 @@ final class TracerTest extends TestCase
         $this->assertNotNull($event->attributes);
         $this->assertSame('b_1', $event->attributes['block_id']);
         $this->assertArrayNotHasKey('span.name', $event->attributes);
-        $this->assertSame(Status::Success, $event->status);
-    }
+            }
 
     public function testSinkFailureIsLoggedAndStackInvariantHolds(): void
     {
@@ -422,6 +403,5 @@ final class TracerTest extends TestCase
 
         $this->assertNull($value);
         $this->assertCount(1, $this->sink->events);
-        $this->assertSame(Status::Success, $this->sink->events[0]->status);
-    }
+            }
 }

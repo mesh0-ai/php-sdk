@@ -8,7 +8,6 @@ use DateTimeImmutable;
 use DateTimeZone;
 use InvalidArgumentException;
 use Mesh0\Event\Event;
-use Mesh0\Event\Status;
 use PHPUnit\Framework\TestCase;
 
 final class EventBuilderTest extends TestCase
@@ -17,11 +16,14 @@ final class EventBuilderTest extends TestCase
     {
         $event = Event::at(new DateTimeImmutable('2026-05-08T12:00:00.123Z'))
             ->withEventId('evt_1')
-            ->withDurationMs(420.5)
             ->withTraceId('trace-1')
             ->withSpan('span-1', 'span-0')
-            ->withStatus(Status::Success)
-            ->withAttributes(['order_id' => 'ord_1', 'app.id' => 'checkout'])
+            ->withAttributes([
+                'order_id'    => 'ord_1',
+                'app.id'      => 'checkout',
+                'status'      => 'success',
+                'duration_ms' => 420.5,
+            ])
             ->withAttribute('amount_usd', 19.99)
             ->withData(['messages' => [['role' => 'user', 'content' => 'hi']]])
             ->build();
@@ -30,45 +32,37 @@ final class EventBuilderTest extends TestCase
 
         $this->assertSame('2026-05-08T12:00:00.123Z', $arr['timestamp']);
         $this->assertSame('evt_1', $arr['event_id']);
-        $this->assertSame(420.5, $arr['duration_ms']);
         $this->assertSame('trace-1', $arr['trace_id']);
         $this->assertSame('span-1', $arr['span_id']);
         $this->assertSame('span-0', $arr['parent_span_id']);
-        $this->assertSame('success', $arr['status']);
         $this->assertSame(
-            ['order_id' => 'ord_1', 'app.id' => 'checkout', 'amount_usd' => 19.99],
+            [
+                'order_id'    => 'ord_1',
+                'app.id'      => 'checkout',
+                'status'      => 'success',
+                'duration_ms' => 420.5,
+                'amount_usd'  => 19.99,
+            ],
             $arr['attributes'],
         );
         $this->assertSame(['messages' => [['role' => 'user', 'content' => 'hi']]], $arr['data']);
     }
 
-    public function testWithStatusError(): void
-    {
-        $arr = Event::now()
-            ->withStatus(Status::Error)
-            ->withAttributes([
-                'error.type' => 'TimeoutError',
-                'error.message' => 'upstream took too long',
-            ])
-            ->build()
-            ->toArray();
-
-        $this->assertSame('error', $arr['status']);
-        $attributes = $arr['attributes'];
-        $this->assertIsArray($attributes);
-        $this->assertSame('TimeoutError', $attributes['error.type']);
-        $this->assertSame('upstream took too long', $attributes['error.message']);
-    }
-
     public function testRejectsLegacyTopLevelFields(): void
     {
         // Wire decoder runs DisallowUnknownFields. Confirm the SDK no longer
-        // emits the legacy top-level fields that were promoted in 1.x — they
-        // must now ride inside `attributes` or `data`.
+        // emits the legacy top-level fields that earlier versions promoted —
+        // they must now ride inside `attributes` or `data`. Includes the
+        // 4.x-removed `status` and `duration_ms`.
         $arr = Event::now()->withAttribute('app.id', 'checkout')->build()->toArray();
 
-        foreach (['app_id', 'environment', 'operation', 'model', 'usage', 'user_id', 'session_id', 'tools', 'messages', 'finish_reason', 'error_type', 'error_message'] as $legacy) {
-            $this->assertArrayNotHasKey($legacy, $arr, "legacy field '{$legacy}' must not appear top-level");
+        $legacy = [
+            'app_id', 'environment', 'operation', 'model', 'usage', 'user_id',
+            'session_id', 'tools', 'messages', 'finish_reason', 'error_type',
+            'error_message', 'status', 'duration_ms',
+        ];
+        foreach ($legacy as $k) {
+            $this->assertArrayNotHasKey($k, $arr, "legacy field '{$k}' must not appear top-level");
         }
     }
 
@@ -128,33 +122,19 @@ final class EventBuilderTest extends TestCase
         Event::now()->withSpan('');
     }
 
-    public function testNegativeDurationRejected(): void
-    {
-        $this->expectException(InvalidArgumentException::class);
-        Event::now()->withDurationMs(-1.0);
-    }
-
-    public function testNonFiniteDurationRejected(): void
-    {
-        $this->expectException(InvalidArgumentException::class);
-        Event::now()->withDurationMs(INF);
-    }
-
     public function testWireKeysAreOnlyTheNarrowSet(): void
     {
         // Positive allowlist: every key the SDK is allowed to emit.
         $arr = Event::at(new DateTimeImmutable('2026-01-01T00:00:00Z'))
             ->withEventId('evt_1')
-            ->withDurationMs(1.0)
             ->withTraceId('tr_1')
             ->withSpan('sp_1', 'sp_0')
-            ->withStatus(Status::Success)
             ->withAttributes(['a' => 1])
             ->withData(['b' => 2])
             ->build()
             ->toArray();
 
-        $expected = ['timestamp', 'event_id', 'duration_ms', 'trace_id', 'span_id', 'parent_span_id', 'status', 'attributes', 'data'];
+        $expected = ['timestamp', 'event_id', 'trace_id', 'span_id', 'parent_span_id', 'attributes', 'data'];
         sort($expected);
         $actual = array_keys($arr);
         sort($actual);

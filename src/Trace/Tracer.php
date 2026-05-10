@@ -7,7 +7,6 @@ namespace Mesh0\Trace;
 use DateTimeImmutable;
 use Mesh0\Event\EventBuilder;
 use Mesh0\Event\EventSink;
-use Mesh0\Event\Status;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 use Throwable;
@@ -16,16 +15,17 @@ use Throwable;
  * Builds a trace tree from nested span enter/exit calls and ships each
  * span to a sink as an independent event.
  *
- * Each span produces exactly one event on `exit()`, carrying `trace_id`,
- * `span_id`, `parent_span_id`, `duration_ms`, and `status`. Everything
- * else is just attributes — the Tracer never injects keys on the
- * caller's behalf. By convention (per DATA_MODEL.md) callers set
+ * Each span produces exactly one event on `exit()`, carrying
+ * `trace_id`, `span_id`, and `parent_span_id`. Everything else is just
+ * attributes — the Tracer never injects keys on the caller's behalf.
+ * By convention (per DATA_MODEL.md) callers set
  * `attributes["span.name"]`, and on the error path
- * `attributes["error.type"]` / `attributes["error.message"]`, but these
- * are normal attribute keys with no special handling here.
+ * `attributes["error.type"]` / `attributes["error.message"]`. Callers
+ * that want span duration or status as queryable signals should set
+ * them as attributes themselves (e.g. `attributes["duration_ms"]`,
+ * `attributes["status"]`) and alias/promote them on the project schema.
  *
- * Closure form (recommended — exception-safe; sets `status=error` on
- * throw, no attributes are added):
+ * Closure form (recommended — exception-safe):
  *
  * ```php
  * $result = $tracer->span(['span.name' => 'block.if', 'block_id' => 'b_123'], function () use ($tracer) {
@@ -42,8 +42,9 @@ use Throwable;
  *     // run block
  *     $tracer->exit($h, attributes: ['iterations' => $n]);
  * } catch (\Throwable $e) {
- *     $tracer->exit($h, Status::Error, [
- *         'error.type' => $e::class,
+ *     $tracer->exit($h, [
+ *         'status'        => 'error',
+ *         'error.type'    => $e::class,
  *         'error.message' => $e->getMessage(),
  *     ]);
  *     throw $e;
@@ -184,7 +185,6 @@ final class Tracer
      */
     public function exit(
         SpanHandle $handle,
-        Status $status = Status::Success,
         array $attributes = [],
     ): void {
         // Pop until we find the handle. In well-formed code this is just the
@@ -222,19 +222,15 @@ final class Tracer
                 'span_id' => $handle->spanId,
                 'trace_id' => $handle->traceId,
                 'started_at' => $handle->startedAt->format('Y-m-d\\TH:i:s.v\\Z'),
-                'duration_ms' => (\hrtime(true) - $handle->startedHrTimeNs) / 1_000_000.0,
             ]);
             return;
         }
 
-        $durationMs = (\hrtime(true) - $handle->startedHrTimeNs) / 1_000_000.0;
         $merged = \array_merge($handle->attributes, $attributes);
 
         $builder = (new EventBuilder($handle->startedAt))
             ->withTraceId($handle->traceId)
-            ->withSpan($handle->spanId, $handle->parentSpanId)
-            ->withDurationMs($durationMs)
-            ->withStatus($status);
+            ->withSpan($handle->spanId, $handle->parentSpanId);
         if ($merged !== []) {
             $builder = $builder->withAttributes($merged);
         }
@@ -254,12 +250,14 @@ final class Tracer
     }
 
     /**
-     * Run `$fn` inside a new span. The span exits with `success` if `$fn`
-     * returns, or `error` if it throws (the exception is re-thrown).
+     * Run `$fn` inside a new span. The span emits an event regardless of
+     * whether `$fn` returns or throws; on throw the exception is
+     * re-thrown unchanged.
      *
-     * No attributes are added on the error path — if you want
-     * `error.type` / `error.message` recorded, use the manual form
-     * ({@see enter()} + {@see exit()}) and pass them yourself.
+     * No attributes are added on the error path — if you want a
+     * `status` or `error.type` / `error.message` recorded, use the
+     * manual form ({@see enter()} + {@see exit()}) and pass them
+     * yourself.
      *
      * @template T
      * @param array<string, mixed> $attributes
@@ -275,7 +273,7 @@ final class Tracer
             // Don't let a throwing exit() mask the original — the span is
             // best-effort, the user code's exception is the real story.
             try {
-                $this->exit($h, Status::Error);
+                $this->exit($h);
             } catch (Throwable $exitErr) {
                 $this->logger->error('mesh0 Tracer::exit failed; span event lost', [
                     'exception' => $exitErr,

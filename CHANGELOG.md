@@ -4,6 +4,51 @@ All notable changes to `mesh0/sdk` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 4.0.0 - 2026-05-10
+
+`status` and `duration_ms` are no longer top-level wire fields. The platform
+no longer ships them as TQL builtins either — what counts as an "error" or
+a meaningful "duration" is domain-specific, and reserving these as the
+privileged metrics baked an opinion into the row format. They're now
+ordinary `attributes` keys; alias or promote them on the project schema if
+you want them queryable in TQL.
+
+### Removed
+- `Event::$durationMs` / `Event::$status` properties.
+- `EventBuilder::withDurationMs()` / `EventBuilder::withStatus()`.
+- `Mesh0\Event\Status` enum.
+- `Mesh0Logger`: `duration_ms` is no longer a reserved context key (it
+  flows into `attributes` like any other context entry); the logger no
+  longer stamps `status=error` for `error`-and-above levels or for
+  `exception` context — error semantics live in `error.type` /
+  `error.message` attributes.
+- `Tracer::exit()` no longer takes a `Status` argument; pass any status
+  signal as an attribute (`['status' => 'error', ...]`) instead. The
+  closure form of `Tracer::span()` no longer touches a status field on
+  throw — it just lets the span event emit and re-throws.
+
+### Migration
+Move what you used to set top-level into `attributes`:
+
+```php
+// Before (3.x):
+Event::now()
+    ->withStatus(Status::Error)
+    ->withDurationMs(142.5)
+    ->withAttribute('order_id', 'ord_1');
+
+// After (4.x):
+Event::now()
+    ->withAttributes([
+        'status'      => 'error',
+        'duration_ms' => 142.5,
+        'order_id'    => 'ord_1',
+    ]);
+```
+
+For TQL, alias `status` and `duration_ms` on the project schema page
+(`POST /aliases`) so they resolve in filters/groupBys/metrics.
+
 ## 3.0.0 - 2026-05-09
 
 The Tracer no longer has any magical attribute injection. Span name and

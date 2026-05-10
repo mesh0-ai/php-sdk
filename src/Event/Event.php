@@ -13,9 +13,10 @@ use DateTimeZone;
  *
  * Mirrors the wire shape exactly — see DATA_MODEL.md in the mesh0 core
  * repo. Only `timestamp` is required; everything else is optional and
- * server-defaulted. Domain-specific data goes into `attributes`
- * (queryable, promotable to typed columns) or `data` (opaque, only
- * shown on single-event drilldown — for big payloads).
+ * server-defaulted. Domain-specific data (status, duration_ms, model,
+ * usage, user, …) goes into `attributes` (queryable, promotable to
+ * typed columns) or `data` (opaque, only shown on single-event
+ * drilldown — for big payloads).
  *
  * The wire decoder runs `DisallowUnknownFields`: any field outside the
  * set defined here is rejected with a 400. Add new top-level fields
@@ -30,11 +31,9 @@ final readonly class Event
     public function __construct(
         public DateTimeInterface $timestamp,
         public ?string $eventId = null,
-        public ?float $durationMs = null,
         public ?string $traceId = null,
         public ?string $spanId = null,
         public ?string $parentSpanId = null,
-        public ?Status $status = null,
         public ?array $attributes = null,
         public ?array $data = null,
     ) {
@@ -70,9 +69,6 @@ final readonly class Event
         if ($this->eventId !== null) {
             $out['event_id'] = $this->eventId;
         }
-        if ($this->durationMs !== null) {
-            $out['duration_ms'] = $this->durationMs;
-        }
         if ($this->traceId !== null) {
             $out['trace_id'] = $this->traceId;
         }
@@ -81,9 +77,6 @@ final readonly class Event
         }
         if ($this->parentSpanId !== null) {
             $out['parent_span_id'] = $this->parentSpanId;
-        }
-        if ($this->status !== null) {
-            $out['status'] = $this->status->value;
         }
         if ($this->attributes !== null) {
             $out['attributes'] = $this->attributes;
