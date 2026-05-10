@@ -1,0 +1,189 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Mesh0;
+
+use Mesh0\Exception\ConfigurationException;
+use Mesh0\Http\Transport;
+use Mesh0\Logger\Mesh0Logger;
+use Mesh0\Metrics\AgentMetricSink;
+use Mesh0\Metrics\Metrics;
+use Mesh0\Metrics\MetricSink;
+use Mesh0\Resource\Events;
+use Mesh0\Resource\Meta;
+use Mesh0\Resource\Query;
+use Mesh0\Resource\Traces;
+use Mesh0\Trace\Tracer;
+use Psr\Http\Client\ClientInterface;
+use Psr\Http\Message\RequestFactoryInterface;
+use Psr\Http\Message\StreamFactoryInterface;
+use Psr\Log\LoggerInterface;
+
+/**
+ * Top-level entry point for the mesh0 PHP SDK.
+ *
+ * Construct once and reuse — the client is stateless beyond its config and
+ * the underlying PSR-18 client. Resource sub-clients are exposed as
+ * properties; you can keep references to them or fetch them lazily through
+ * the typed accessors.
+ *
+ * @example
+ *   $mesh0 = Mesh0\Client::create('m0_abc12_…');
+ *   $mesh0->events->send(
+ *       Mesh0\Event\Event::now()
+ *           ->withAttributes([
+ *               'app.id' => 'checkout',
+ *               'app.environment' => 'prod',
+ *               'span.name' => 'charge.succeeded',
+ *               'order_id' => 'ord_123',
+ *           ]),
+ *   );
+ */
+final class Client
+{
+    public readonly Events $events;
+    public readonly Traces $traces;
+    public readonly Query $query;
+    public readonly Meta $meta;
+
+    private readonly Transport $transport;
+    private ?Metrics $metrics = null;
+
+    public function __construct(
+        public readonly Config $config,
+        ?ClientInterface $http = null,
+        ?RequestFactoryInterface $requestFactory = null,
+        ?StreamFactoryInterface $streamFactory = null,
+    ) {
+        $this->transport = new Transport($config, $http, $requestFactory, $streamFactory);
+        $this->events = new Events($this->transport, $config);
+        $this->traces = new Traces($this->transport);
+        $this->query = new Query($this->transport);
+        $this->meta = new Meta($this->transport);
+    }
+
+    /** Convenience: build a client from an API key string and (optional) base URL. */
+    public static function create(string $apiKey, ?string $baseUrl = null): self
+    {
+        return new self(
+            new Config(
+                apiKey: $apiKey,
+                baseUrl: $baseUrl ?? Config::DEFAULT_BASE_URL,
+            ),
+        );
+    }
+
+    /** Convenience: build a client from environment variables (`MESH0_API_KEY`, `MESH0_BASE_URL`). */
+    public static function fromEnv(): self
+    {
+        return new self(Config::fromEnv());
+    }
+
+    public function events(): Events
+    {
+        return $this->events;
+    }
+
+    public function traces(): Traces
+    {
+        return $this->traces;
+    }
+
+    public function query(): Query
+    {
+        return $this->query;
+    }
+
+    public function meta(): Meta
+    {
+        return $this->meta;
+    }
+
+    /**
+     * Return a metrics client targeting a co-located mesh0 metrics-agent
+     * over its Unix-domain datagram socket.
+     *
+     * The socket is opened lazily on the first `send()` so calling this
+     * method does no I/O. Subsequent calls without arguments return the
+     * same instance. Pass `socketPath` to build a fresh `Metrics`
+     * targeting a different agent, or pass a custom `MetricSink` to
+     * bypass the datagram transport entirely (e.g. in tests).
+     *
+     * The default `socketPath` is read from `Config::agentSocketPath`,
+     * which `Config::fromEnv()` populates from `MESH0_AGENT_SOCKET`. If
+     * neither is set, this method throws — there is no UDP loopback or
+     * implicit fallback.
+     *
+     * @param array<string, string|int|float> $defaultTags Tags merged into every metric.
+     * @throws ConfigurationException when neither `socketPath` nor `Config::$agentSocketPath` is set and no custom `sink` is provided.
+     */
+    public function metrics(
+        ?string $socketPath = null,
+        array $defaultTags = [],
+        ?MetricSink $sink = null,
+    ): Metrics {
+        if ($sink !== null || $socketPath !== null || $defaultTags !== []) {
+            $effectiveSink = $sink ?? new AgentMetricSink(
+                $socketPath ?? $this->requireAgentSocketPath(),
+            );
+            return new Metrics($effectiveSink, $defaultTags);
+        }
+        return $this->metrics ??= new Metrics(new AgentMetricSink($this->requireAgentSocketPath()));
+    }
+
+    private function requireAgentSocketPath(): string
+    {
+        $path = $this->config->agentSocketPath;
+        if ($path === null) {
+            throw new ConfigurationException(
+                'Config::$agentSocketPath (env MESH0_AGENT_SOCKET) is not set; cannot build a metrics-agent sink',
+            );
+        }
+        return $path;
+    }
+
+    /**
+     * Build a PSR-3 logger backed by this client.
+     *
+     * Logs are buffered in memory and flushed on `flush()` / on shutdown / when
+     * the buffer fills. See {@see Mesh0Logger} for the full set of options.
+     *
+     * To stamp every record with constant tags (app id, environment, …),
+     * pass them via `$defaults` — they are merged into `attributes`.
+     *
+     * Pass `$fallback` if you want diagnostics about swallowed delivery
+     * errors and malformed caller input — by default they go nowhere
+     * (logger never throws).
+     *
+     * @param array<string, mixed> $defaults Default attributes merged into every record.
+     */
+    public function logger(
+        int $bufferSize = 50,
+        array $defaults = [],
+        ?Tracer $tracer = null,
+        ?LoggerInterface $fallback = null,
+    ): LoggerInterface {
+        return new Mesh0Logger(
+            client: $this,
+            bufferSize: $bufferSize,
+            defaults: $defaults,
+            tracer: $tracer,
+            fallback: $fallback,
+        );
+    }
+
+    /**
+     * Build a {@see Tracer} that ships each closed span through the
+     * local metrics-agent UDS-DGRAM sink. Convenience factory — call
+     * `new Tracer(...)` directly if you want a different sink (e.g. an
+     * in-memory test sink or a custom transport).
+     */
+    public function tracer(?LoggerInterface $logger = null): Tracer
+    {
+        return new Tracer(
+            sink: $this->events->agent(),
+            logger: $logger,
+        );
+    }
+}
