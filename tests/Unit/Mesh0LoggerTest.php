@@ -73,6 +73,8 @@ final class Mesh0LoggerTest extends TestCase
         $this->assertArrayNotHasKey('status', $event);
         $attributes = $event['attributes'];
         $this->assertIsArray($attributes);
+        // The SDK never auto-stamps status anywhere, including inside attributes.
+        $this->assertArrayNotHasKey('status', $attributes);
         $this->assertSame('RuntimeException', $attributes['error.type']);
         $this->assertSame('boom', $attributes['error.message']);
         $this->assertSame('ord_1', $attributes['order_id']);

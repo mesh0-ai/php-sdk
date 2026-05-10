@@ -170,7 +170,6 @@ final class Tracer
             spanId: $spanId,
             parentSpanId: $parentSpanId,
             startedAt: new DateTimeImmutable(),
-            startedHrTimeNs: \hrtime(true),
             attributes: $attributes,
         );
         $this->stack[] = $handle;

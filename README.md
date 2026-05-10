@@ -40,7 +40,7 @@ use Mesh0\Event\Event;
 $mesh0 = Client::create('m0_abcde_xxxxxxxxxxxxxxxxxxxxxxxx');
 
 // Send a single event. The wire shape is intentionally narrow — identity,
-// time, status, plus two open bins (`attributes` queryable, `data` opaque).
+// time, plus two open bins (`attributes` queryable, `data` opaque).
 // Anything domain-specific goes inside attributes / data.
 $mesh0->events->send(
     Event::now()

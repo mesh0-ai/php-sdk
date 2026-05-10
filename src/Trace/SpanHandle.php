@@ -10,7 +10,7 @@ use DateTimeInterface;
  * Opaque handle returned by {@see Tracer::enter()} and consumed by
  * {@see Tracer::exit()}.
  *
- * Carries the trace identifiers and start markers captured at enter time so
+ * Carries the trace identifiers and start time captured at enter time so
  * the matching exit call does not have to recompute them. Treat this as
  * opaque — its shape is not part of the public API.
  *
@@ -24,7 +24,6 @@ final readonly class SpanHandle
         public string $spanId,
         public ?string $parentSpanId,
         public DateTimeInterface $startedAt,
-        public int $startedHrTimeNs,
         public array $attributes,
     ) {
     }

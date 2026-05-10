@@ -37,7 +37,23 @@ final class TracerTest extends TestCase
         $this->assertNotNull($event->attributes);
         $this->assertSame('block.execute', $event->attributes['span.name']);
         $this->assertSame('b_1', $event->attributes['block_id']);
-                            }
+    }
+
+    public function testTracerDoesNotAutoStampDurationMs(): void
+    {
+        // 4.0.0: Tracer no longer measures wall time and writes it as an
+        // attribute. Callers who want a queryable duration put it in
+        // attributes themselves. Regression guard: if any future refactor
+        // re-introduces auto-stamping inside Tracer, this fails.
+        $tracer = new Tracer($this->sink);
+
+        $h = $tracer->enter(['span.name' => 'block.compute']);
+        $tracer->exit($h);
+
+        $event = $this->sink->events[0];
+        $this->assertNotNull($event->attributes);
+        $this->assertArrayNotHasKey('duration_ms', $event->attributes);
+    }
 
     public function testNestedSpansShareTraceIdAndChainParents(): void
     {
@@ -87,7 +103,7 @@ final class TracerTest extends TestCase
 
         $this->assertSame(42, $value);
         $this->assertCount(1, $this->sink->events);
-            }
+    }
 
     public function testClosureFormRethrowsAndEmitsErrorSpanWithoutInjectingAttrs(): void
     {
@@ -105,7 +121,7 @@ final class TracerTest extends TestCase
         $this->assertInstanceOf(RuntimeException::class, $thrown);
         $this->assertCount(1, $this->sink->events);
         $event = $this->sink->events[0];
-                $this->assertNotNull($event->attributes);
+        $this->assertNotNull($event->attributes);
         // error.* is the caller's responsibility — closure form does not inject.
         $this->assertArrayNotHasKey('error.type', $event->attributes);
         $this->assertArrayNotHasKey('error.message', $event->attributes);
@@ -148,7 +164,7 @@ final class TracerTest extends TestCase
         $childEvent = $this->sink->events[0];
         $parentEvent = $this->sink->events[1];
 
-                        $this->assertSame($parentEvent->spanId, $childEvent->parentSpanId);
+        $this->assertSame($parentEvent->spanId, $childEvent->parentSpanId);
         $this->assertSame($parentEvent->traceId, $childEvent->traceId);
     }
 
@@ -274,7 +290,6 @@ final class TracerTest extends TestCase
         );
     }
 
-
     public function testUnknownHandleOnExitIsLoggedAndIgnored(): void
     {
         $logger = new RecordingLogger();
@@ -356,7 +371,7 @@ final class TracerTest extends TestCase
         $this->assertNotNull($event->attributes);
         $this->assertSame('b_1', $event->attributes['block_id']);
         $this->assertArrayNotHasKey('span.name', $event->attributes);
-            }
+    }
 
     public function testSinkFailureIsLoggedAndStackInvariantHolds(): void
     {
@@ -403,5 +418,5 @@ final class TracerTest extends TestCase
 
         $this->assertNull($value);
         $this->assertCount(1, $this->sink->events);
-            }
+    }
 }
