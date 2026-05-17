@@ -53,20 +53,38 @@ final class Transport
     }
 
     /**
-     * @param array<string, mixed> $body
+     * @param array<string, mixed>  $body
+     * @param array<string, string> $headers Extra per-request headers (e.g. `Idempotency-Key`).
      * @return array<string, mixed>
      */
-    public function post(string $path, array $body): array
+    public function post(string $path, array $body, array $headers = []): array
     {
-        return $this->request('POST', $path, [], $body);
+        return $this->request('POST', $path, [], $body, $headers);
+    }
+
+    /**
+     * @param array<string, mixed>  $body
+     * @param array<string, string> $headers
+     * @return array<string, mixed>
+     */
+    public function patch(string $path, array $body, array $headers = []): array
+    {
+        return $this->request('PATCH', $path, [], $body, $headers);
+    }
+
+    /** @return array<string, mixed> */
+    public function delete(string $path): array
+    {
+        return $this->request('DELETE', $path, [], null, []);
     }
 
     /**
      * @param array<string, scalar|null> $query
      * @param array<string, mixed>|null  $body
+     * @param array<string, string>      $headers
      * @return array<string, mixed>
      */
-    private function request(string $method, string $path, array $query, ?array $body): array
+    private function request(string $method, string $path, array $query, ?array $body, array $headers = []): array
     {
         $url = $this->buildUrl($path, $query);
         $request = $this->requestFactory->createRequest($method, $url)
@@ -83,6 +101,12 @@ final class Transport
             $request = $request
                 ->withHeader('Content-Type', 'application/json')
                 ->withBody($this->streamFactory->createStream($json));
+        }
+
+        // Per-call overrides (e.g. Idempotency-Key for /v1/alerts POSTs)
+        // are applied last so they win over defaults.
+        foreach ($headers as $name => $value) {
+            $request = $request->withHeader($name, $value);
         }
 
         $attempt = 0;

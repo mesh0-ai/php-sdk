@@ -54,8 +54,11 @@ final class Config
         if ($apiKey === '') {
             throw new ConfigurationException('apiKey must not be empty');
         }
-        if (!str_starts_with($apiKey, 'm0_')) {
-            throw new ConfigurationException('apiKey must start with "m0_"');
+        // Two key shapes share the same Bearer transport:
+        //   m0_<routing>_<secret>  — project-scoped (ingest, query, traces)
+        //   m0u_<secret>           — user-scoped (/v1/user/* control plane)
+        if (!str_starts_with($apiKey, 'm0_') && !str_starts_with($apiKey, 'm0u_')) {
+            throw new ConfigurationException('apiKey must start with "m0_" or "m0u_"');
         }
         if ($baseUrl === '' || !preg_match('#^https?://#', $baseUrl)) {
             throw new ConfigurationException('baseUrl must be an http(s) URL');

@@ -10,10 +10,12 @@ use Mesh0\Logger\Mesh0Logger;
 use Mesh0\Metrics\AgentMetricSink;
 use Mesh0\Metrics\Metrics;
 use Mesh0\Metrics\MetricSink;
+use Mesh0\Resource\Alerts;
 use Mesh0\Resource\Events;
 use Mesh0\Resource\Meta;
 use Mesh0\Resource\Query;
 use Mesh0\Resource\Traces;
+use Mesh0\Resource\User;
 use Mesh0\Trace\Tracer;
 use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestFactoryInterface;
@@ -46,6 +48,8 @@ final class Client
     public readonly Traces $traces;
     public readonly Query $query;
     public readonly Meta $meta;
+    public readonly User $user;
+    public readonly Alerts $alerts;
 
     private readonly Transport $transport;
     private ?Metrics $metrics = null;
@@ -61,6 +65,8 @@ final class Client
         $this->traces = new Traces($this->transport);
         $this->query = new Query($this->transport);
         $this->meta = new Meta($this->transport);
+        $this->user = new User($this->transport);
+        $this->alerts = new Alerts($this->transport);
     }
 
     /** Convenience: build a client from an API key string and (optional) base URL. */
@@ -98,6 +104,16 @@ final class Client
     public function meta(): Meta
     {
         return $this->meta;
+    }
+
+    public function user(): User
+    {
+        return $this->user;
+    }
+
+    public function alerts(): Alerts
+    {
+        return $this->alerts;
     }
 
     /**
