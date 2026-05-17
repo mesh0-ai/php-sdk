@@ -30,7 +30,7 @@ src/
 ├── Event/                 # Event + EventBuilder + value objects (Status, Usage, Model) + EventSink
 ├── Logger/Mesh0Logger.php # PSR-3 logger that ships records as events
 ├── Trace/                 # Tracer + SpanHandle (nested-span instrumentation, in-process state)
-└── Resource/              # one class per API namespace (Events, Traces, Query, Meta)
+└── Resource/              # one class per API namespace (Events, Traces, Query, Meta, Alerts, User)
 tests/
 ├── Support/               # MockHttpClient
 └── Unit/                  # PHPUnit tests, mirror src/ layout
@@ -41,24 +41,39 @@ respective subdirectory. Do not add endpoint logic into `Client.php`.
 
 ## API contract — where the truth lives
 
-The wire format is defined by mesh0's backend in
-`~/mesh0/core/backend/src/routes/` and the schemas in
-`~/mesh0/core/backend/src/ingest/`. When changing event payloads:
+The wire format is defined by mesh0's Go backend under
+`~/mesh0/core/backend/internal/httpserver/routes/`, with ingest
+plumbing in `~/mesh0/core/backend/internal/ingest/`. When changing
+payloads:
 
-- `/v1/events` — `routes/events.ts` (zod `EventSchema`)
-- `/v1/traces` — OTLP/HTTP JSON, `ingest/normalize.ts`
-- `/v1/query`  — `routes/public-api.ts` + `query/tql.ts`
-- `/v1/me`, `/v1/org`, `/v1/project`, `/v1/traces/:id`,
-  `/v1/events`, `/v1/events/stream` — `routes/public-api.ts`
+- `/v1/events`                          — `routes/events.go`
+- `/v1/traces`                          — OTLP/HTTP JSON, `internal/ingest/`
+- `/v1/query`                           — `routes/public_api.go` + `internal/query/tql/`
+- `/v1/me`, `/v1/org`, `/v1/project`,
+  `/v1/traces/:id`, `/v1/events`,
+  `/v1/events/stream`                   — `routes/public_api.go`
+- `/v1/alerts`, `/v1/alert-channels`    — `routes/public_api_alerts.go`
+  (service in `internal/alerts/service.go`)
+- `/v1/user/*`                          — `routes/user_api.go`,
+  `routes/user_api_keys.go`, delegating to `routes/orgs.go` / `routes/organizations.go`
 
-If you add a field, mirror exactly the zod-validated key (e.g.
-`prompt_tokens`, not `promptTokens`) when serializing — the SDK uses
-camelCase in PHP and snake_case on the wire.
+Casing: the ingest path (`/v1/events`) uses snake_case on the wire
+(e.g. `prompt_tokens`). The control-plane endpoints (`/v1/user/*`,
+`/v1/alerts`, `/v1/alert-channels`) use camelCase on the wire
+(`retentionDays`, `expiresAt`, `keyPrefix`). Always check the
+`json:"…"` struct tag on the Go handler before adding a field —
+neither convention is universal.
 
 ## Auth
 
-Bearer token, format `m0_<routing_id>_<secret>`. The transport adds
-`Authorization: Bearer …` to every request. Never log or echo the token.
+Bearer token. Two shapes share the same transport:
+
+- `m0_<routing_id>_<secret>` — project-scoped (ingest, query, traces,
+  alerts).
+- `m0u_<secret>`            — user-scoped (`/v1/user/*` control plane).
+
+The transport adds `Authorization: Bearer …` to every request. Never
+log or echo the token.
 
 ## Retry policy
 
@@ -73,9 +88,15 @@ overrides the computed backoff when present. Max attempts is
 `Config::maxRetries + 1`. **Do not** retry 4xx other than 429 — those are
 client errors and retrying just hides the bug.
 
-Server-side ingest is idempotent on `event_id`, so retrying POSTs is safe.
-If you add a write endpoint that is *not* idempotent, gate it behind a
-flag — don't change the default policy.
+`POST /v1/events` and `POST /v1/traces` are idempotent on `event_id` /
+`trace_id`, so retries are safe by default. Endpoints that are *not*
+idempotent (control-plane creates without `Idempotency-Key` middleware,
+test-fires that send real notifications) must call the transport with
+`idempotent: false` — that disables retry for both transport errors and
+5xx/429 on that one call. Endpoints with server-side `Idempotency-Key`
+support (`POST /v1/alerts`, `POST /v1/alert-channels`) should always
+send the header (auto-generate when the caller doesn't supply one) so
+the default retry behavior stays safe.
 
 ## Error mapping
 

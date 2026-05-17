@@ -53,20 +53,42 @@ final class Transport
     }
 
     /**
-     * @param array<string, mixed> $body
+     * @param array<string, mixed>|null $body    Null sends no request body (no `Content-Type` either).
+     * @param array<string, string>     $headers Extra per-request headers (e.g. `Idempotency-Key`).
+     * @param bool                      $idempotent When false, retries are disabled — both transport
+     *                                              errors and 5xx/429 fail through immediately. Use
+     *                                              for create-endpoints that have no server-side
+     *                                              dedup (no `Idempotency-Key` middleware).
      * @return array<string, mixed>
      */
-    public function post(string $path, array $body): array
+    public function post(string $path, ?array $body, array $headers = [], bool $idempotent = true): array
     {
-        return $this->request('POST', $path, [], $body);
+        return $this->request('POST', $path, [], $body, $headers, $idempotent);
+    }
+
+    /**
+     * @param array<string, mixed>  $body
+     * @param array<string, string> $headers
+     * @return array<string, mixed>
+     */
+    public function patch(string $path, array $body, array $headers = [], bool $idempotent = true): array
+    {
+        return $this->request('PATCH', $path, [], $body, $headers, $idempotent);
+    }
+
+    /** @return array<string, mixed> */
+    public function delete(string $path): array
+    {
+        return $this->request('DELETE', $path, [], null, []);
     }
 
     /**
      * @param array<string, scalar|null> $query
      * @param array<string, mixed>|null  $body
+     * @param array<string, string>      $headers
      * @return array<string, mixed>
      */
-    private function request(string $method, string $path, array $query, ?array $body): array
+    private function request(string $method, string $path, array $query, ?array $body, array $headers = [], bool $idempotent = true): array
     {
         $url = $this->buildUrl($path, $query);
         $request = $this->requestFactory->createRequest($method, $url)
@@ -85,8 +107,14 @@ final class Transport
                 ->withBody($this->streamFactory->createStream($json));
         }
 
+        // Per-call overrides (e.g. Idempotency-Key for /v1/alerts POSTs)
+        // are applied last so they win over defaults.
+        foreach ($headers as $name => $value) {
+            $request = $request->withHeader($name, $value);
+        }
+
         $attempt = 0;
-        $maxAttempts = $this->config->maxRetries + 1;
+        $maxAttempts = $idempotent ? $this->config->maxRetries + 1 : 1;
         while (true) {
             $attempt++;
             try {

@@ -146,4 +146,36 @@ final class TransportTest extends TestCase
         $this->expectException(NetworkException::class);
         $this->transport->get('/v1/me');
     }
+
+    public function testIdempotentFalseSkipsRetryOn5xx(): void
+    {
+        $factory = new HttpFactory();
+        $transport = new Transport(
+            new Config(apiKey: 'm0_abcde_aaaaaaaaaaaaaaaaaaaaaaaa', maxRetries: 3),
+            $this->mock,
+            $factory,
+            $factory,
+        );
+        $this->mock->queueJson(503, ['error' => 'unavailable']);
+        // No second response queued — a retry would surface as "queue is empty".
+
+        try {
+            $transport->post('/v1/anything', ['x' => 1], [], idempotent: false);
+            $this->fail('expected ServerException');
+        } catch (ServerException) {
+            // expected
+        }
+        $this->assertCount(1, $this->mock->requests);
+    }
+
+    public function testPostWithNullBodyOmitsContentType(): void
+    {
+        $this->mock->queueJson(202, ['ok' => true]);
+
+        $this->transport->post('/v1/things/1/test', null);
+
+        $req = $this->mock->lastRequest();
+        $this->assertSame('', (string) $req->getBody());
+        $this->assertFalse($req->hasHeader('Content-Type'));
+    }
 }
