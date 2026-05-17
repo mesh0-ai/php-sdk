@@ -65,7 +65,7 @@ final class AlertsResourceTest extends TestCase
         $this->assertSame('/v1/alerts/weird%2Fref', $this->mock->lastRequest()->getUri()->getPath());
     }
 
-    public function testCreateAlertPostsInputAndOmitsIdempotencyHeader(): void
+    public function testCreateAlertAutoGeneratesIdempotencyKey(): void
     {
         $this->mock->queueJson(201, ['alert' => ['id' => 'a_new']]);
 
@@ -75,8 +75,23 @@ final class AlertsResourceTest extends TestCase
         $this->assertSame('POST', $req->getMethod());
         $this->assertSame('/v1/alerts', $req->getUri()->getPath());
         $this->assertSame(['name' => 'spike', 'threshold' => 10], $this->mock->lastJsonBody());
-        $this->assertFalse($req->hasHeader('Idempotency-Key'));
+        $this->assertTrue($req->hasHeader('Idempotency-Key'));
+        // 16 random bytes hex-encoded → 32 hex chars.
+        $this->assertMatchesRegularExpression('/^[0-9a-f]{32}$/', $req->getHeaderLine('Idempotency-Key'));
         $this->assertSame(['id' => 'a_new'], $a);
+    }
+
+    public function testCreateAlertGeneratesUniqueKeyPerCall(): void
+    {
+        $this->mock->queueJson(201, ['alert' => ['id' => 'a_1']]);
+        $this->mock->queueJson(201, ['alert' => ['id' => 'a_2']]);
+
+        $this->alerts->createAlert(['name' => 'a']);
+        $first = $this->mock->lastRequest()->getHeaderLine('Idempotency-Key');
+        $this->alerts->createAlert(['name' => 'b']);
+        $second = $this->mock->lastRequest()->getHeaderLine('Idempotency-Key');
+
+        $this->assertNotSame($first, $second);
     }
 
     public function testCreateAlertForwardsIdempotencyKey(): void
@@ -113,7 +128,7 @@ final class AlertsResourceTest extends TestCase
         $this->assertSame('/v1/alerts/a_1', $req->getUri()->getPath());
     }
 
-    public function testTestFireAlertPostsEmptyBody(): void
+    public function testTestFireAlertSendsNoBody(): void
     {
         $this->mock->queueJson(202, ['ok' => true]);
 
@@ -122,7 +137,8 @@ final class AlertsResourceTest extends TestCase
         $req = $this->mock->lastRequest();
         $this->assertSame('POST', $req->getMethod());
         $this->assertSame('/v1/alerts/a_1/test', $req->getUri()->getPath());
-        $this->assertSame('[]', (string) $req->getBody());
+        $this->assertSame('', (string) $req->getBody());
+        $this->assertFalse($req->hasHeader('Content-Type'));
         $this->assertTrue($resp['ok']);
     }
 

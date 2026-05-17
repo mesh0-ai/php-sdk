@@ -54,16 +54,19 @@ final class Alerts
     }
 
     /**
-     * Create an alert. Pass `$idempotencyKey` to make retries safe —
-     * replays return the cached response verbatim, mismatched bodies
-     * 409 with `idempotency_key_conflict`.
+     * Create an alert. The transport's automatic 5xx/429 retry would
+     * otherwise risk double-create, so the SDK always sends an
+     * `Idempotency-Key` — caller-supplied if `$idempotencyKey` is set,
+     * otherwise a per-call random value. A replay with the same key and
+     * body returns the cached response; the same key with a different
+     * body 409s as `idempotency_key_conflict`.
      *
      * @param array<string, mixed> $input AlertInput payload (see backend `alerts.AlertInput`).
      * @return array<string, mixed> The created alert.
      */
     public function createAlert(array $input, ?string $idempotencyKey = null): array
     {
-        $headers = $idempotencyKey !== null ? ['Idempotency-Key' => $idempotencyKey] : [];
+        $headers = ['Idempotency-Key' => $idempotencyKey ?? $this->randomIdempotencyKey()];
         $resp = $this->http->post('/v1/alerts', $input, $headers);
         /** @var array<string, mixed> $alert */
         $alert = is_array($resp['alert'] ?? null) ? $resp['alert'] : [];
@@ -95,11 +98,14 @@ final class Alerts
      * Fire a test notification for an alert through its configured
      * channels. Returns the raw response (HTTP 202 on success).
      *
+     * Sends no request body and disables retries — re-firing on a
+     * transient 5xx would double-notify (Slack/webhook spam).
+     *
      * @return array<string, mixed>
      */
     public function testFireAlert(string $ref): array
     {
-        return $this->http->post('/v1/alerts/' . rawurlencode($ref) . '/test', []);
+        return $this->http->post('/v1/alerts/' . rawurlencode($ref) . '/test', null, [], idempotent: false);
     }
 
     /**
@@ -110,11 +116,10 @@ final class Alerts
      */
     public function listAlertHistory(string $ref, ?int $limit = null): array
     {
-        $path = '/v1/alerts/' . rawurlencode($ref) . '/history';
-        if ($limit !== null) {
-            $path .= '?limit=' . $limit;
-        }
-        $resp = $this->http->get($path);
+        $resp = $this->http->get(
+            '/v1/alerts/' . rawurlencode($ref) . '/history',
+            $limit !== null ? ['limit' => $limit] : [],
+        );
         /** @var list<array<string, mixed>> $history */
         $history = is_array($resp['history'] ?? null) ? array_values($resp['history']) : [];
         return $history;
@@ -141,14 +146,16 @@ final class Alerts
     }
 
     /**
-     * Create a channel. Same `Idempotency-Key` contract as `createAlert()`.
+     * Create a channel. Same `Idempotency-Key` contract as `createAlert()`
+     * — caller-supplied key wins, otherwise the SDK generates one so
+     * transport retries never double-create.
      *
      * @param array<string, mixed> $input ChannelInput payload.
      * @return array<string, mixed>
      */
     public function createChannel(array $input, ?string $idempotencyKey = null): array
     {
-        $headers = $idempotencyKey !== null ? ['Idempotency-Key' => $idempotencyKey] : [];
+        $headers = ['Idempotency-Key' => $idempotencyKey ?? $this->randomIdempotencyKey()];
         $resp = $this->http->post('/v1/alert-channels', $input, $headers);
         /** @var array<string, mixed> $channel */
         $channel = is_array($resp['channel'] ?? null) ? $resp['channel'] : [];
@@ -178,12 +185,23 @@ final class Alerts
     /**
      * Send a test notification through a channel without going through
      * an alert. Useful for verifying webhook URLs / Slack tokens at
-     * setup time.
+     * setup time. Same no-retry contract as {@see testFireAlert()}.
      *
      * @return array<string, mixed>
      */
     public function testFireChannel(string $ref): array
     {
-        return $this->http->post('/v1/alert-channels/' . rawurlencode($ref) . '/test', []);
+        return $this->http->post('/v1/alert-channels/' . rawurlencode($ref) . '/test', null, [], idempotent: false);
+    }
+
+    /**
+     * 128-bit random opaque key, hex-encoded. The server treats it as
+     * opaque (up to 128 chars), so any unique string would do — using
+     * `random_bytes` keeps us aligned with the rest of the SDK
+     * (see {@see \Mesh0\Trace\Tracer}).
+     */
+    private function randomIdempotencyKey(): string
+    {
+        return bin2hex(random_bytes(16));
     }
 }

@@ -29,18 +29,38 @@ final class UserResourceTest extends TestCase
         ));
     }
 
-    public function testMeReturnsResponseUnwrapped(): void
+    public function testMeUnwrapsUser(): void
     {
         $this->mock->queueJson(200, [
             'user' => ['id' => 'u_1', 'email' => 'a@b.c'],
             'apiKey' => ['id' => 'k_1', 'scope' => 'admin'],
         ]);
 
-        $resp = $this->user->me();
+        $user = $this->user->me();
 
         $req = $this->mock->lastRequest();
         $this->assertSame('GET', $req->getMethod());
         $this->assertSame('/v1/user/me', $req->getUri()->getPath());
+        $this->assertSame(['id' => 'u_1', 'email' => 'a@b.c'], $user);
+    }
+
+    public function testMeReturnsNullWhenUserMissing(): void
+    {
+        $this->mock->queueJson(200, []);
+
+        $this->assertNull($this->user->me());
+    }
+
+    public function testMeEnvelopeReturnsFullPayload(): void
+    {
+        $this->mock->queueJson(200, [
+            'user' => ['id' => 'u_1', 'email' => 'a@b.c'],
+            'apiKey' => ['id' => 'k_1', 'scope' => 'admin'],
+        ]);
+
+        $resp = $this->user->meEnvelope();
+
+        $this->assertSame('/v1/user/me', $this->mock->lastRequest()->getUri()->getPath());
         $this->assertSame(['id' => 'u_1', 'email' => 'a@b.c'], $resp['user']);
         $this->assertSame(['id' => 'k_1', 'scope' => 'admin'], $resp['apiKey']);
     }
@@ -289,6 +309,68 @@ final class UserResourceTest extends TestCase
         $req = $this->mock->lastRequest();
         $this->assertSame('DELETE', $req->getMethod());
         $this->assertSame('/v1/user/orgs/acme/projects/p_1/keys/k_1', $req->getUri()->getPath());
+    }
+
+    public function testRevokeProjectKeyEscapesKeyId(): void
+    {
+        $this->mock->queueJson(200, ['ok' => true]);
+
+        $this->user->revokeProjectKey('acme', 'p_1', 'weird/id');
+
+        $this->assertSame(
+            '/v1/user/orgs/acme/projects/p_1/keys/weird%2Fid',
+            $this->mock->lastRequest()->getUri()->getPath(),
+        );
+    }
+
+    public function testUpdateProjectThrowsWithoutAnyField(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->user->updateProject('acme', 'p_1');
+    }
+
+    public function testCreateOrgDoesNotRetryOn5xx(): void
+    {
+        // Build a fresh User against a transport that *would* retry if
+        // the call were marked idempotent — the assertion here is that
+        // createOrg passes idempotent: false through to the transport.
+        $factory = new HttpFactory();
+        $user = new User(new Transport(
+            new Config(apiKey: 'm0u_aaaaaaaaaaaaaaaaaaaaaaaa', maxRetries: 3),
+            $this->mock,
+            $factory,
+            $factory,
+        ));
+        $this->mock->queueJson(503, ['error' => 'unavailable']);
+        // No retry response queued.
+
+        try {
+            $user->createOrg('Acme');
+            $this->fail('expected ServerException');
+        } catch (\Mesh0\Exception\ServerException) {
+            // expected
+        }
+        $this->assertCount(1, $this->mock->requests);
+    }
+
+    public function testCreateProjectKeyDoesNotRetryOn5xx(): void
+    {
+        $factory = new HttpFactory();
+        $user = new User(new Transport(
+            new Config(apiKey: 'm0u_aaaaaaaaaaaaaaaaaaaaaaaa', maxRetries: 3),
+            $this->mock,
+            $factory,
+            $factory,
+        ));
+        $this->mock->queueJson(500, ['error' => 'internal_error']);
+
+        try {
+            $user->createProjectKey('acme', 'p_1', name: 'ci');
+            $this->fail('expected ServerException');
+        } catch (\Mesh0\Exception\ServerException) {
+            // expected
+        }
+        $this->assertCount(1, $this->mock->requests);
     }
 
     public function testUserKeyPassesThroughConfigValidation(): void

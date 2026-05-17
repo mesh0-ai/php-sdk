@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Mesh0\Resource;
 
+use InvalidArgumentException;
 use Mesh0\Http\Transport;
 
 /**
@@ -14,9 +15,14 @@ use Mesh0\Http\Transport;
  * Auth is the same Bearer mechanism as the project surfaces, so this
  * resource shares the same {@see Transport}. Returned payloads are kept
  * as associative arrays — the wire shape is documented in the backend
- * `routes/orgs.go` / `routes/organizations.go` handlers and we don't
- * promote those into PHP DTOs (yet) because the shape evolves
- * faster than the SDK release cadence.
+ * `internal/httpserver/routes/orgs.go` / `organizations.go` / `user_api.go`
+ * handlers and we don't promote those into PHP DTOs (yet) because the
+ * shape evolves faster than the SDK release cadence.
+ *
+ * None of the create-endpoints under `/v1/user/*` are guarded by an
+ * `Idempotency-Key` middleware on the server side, so the SDK opts out
+ * of automatic retry on those POSTs. A retry on a transient 5xx could
+ * mint a second org / project / API key the caller never sees.
  */
 final class User
 {
@@ -27,13 +33,28 @@ final class User
     // --- /v1/user/me ------------------------------------------------------
 
     /**
-     * The authenticated user, plus a summary of the API key in use.
+     * The authenticated user. Returns the unwrapped `user` object so
+     * the signature matches {@see \Mesh0\Resource\Meta::me()}; callers
+     * that also want the API key summary the endpoint returns can use
+     * {@see meEnvelope()} instead (same round-trip).
      *
-     * Response shape: `{ user: {...}, apiKey?: { id, scope } }`.
+     * @return array<string, mixed>|null Null when the response has no `user`.
+     */
+    public function me(): ?array
+    {
+        $resp = $this->http->get('/v1/user/me');
+        $user = $resp['user'] ?? null;
+        return is_array($user) ? $user : null;
+    }
+
+    /**
+     * Raw `/v1/user/me` envelope: `{ user: {...}, apiKey?: { id, scope } }`.
+     * Use when both the profile and the active key's metadata are
+     * needed.
      *
      * @return array<string, mixed>
      */
-    public function me(): array
+    public function meEnvelope(): array
     {
         return $this->http->get('/v1/user/me');
     }
@@ -66,7 +87,7 @@ final class User
         if ($slug !== null) {
             $body['slug'] = $slug;
         }
-        $resp = $this->http->post('/v1/user/orgs', $body);
+        $resp = $this->http->post('/v1/user/orgs', $body, [], idempotent: false);
         /** @var array<string, mixed> $org */
         $org = is_array($resp['organization'] ?? null) ? $resp['organization'] : [];
         return $org;
@@ -142,7 +163,7 @@ final class User
         if ($schema !== null) {
             $body['schema'] = $schema;
         }
-        return $this->http->post($this->projectsPath($slug), $body);
+        return $this->http->post($this->projectsPath($slug), $body, [], idempotent: false);
     }
 
     /**
@@ -157,8 +178,10 @@ final class User
 
     /**
      * Update a project. At least one of `name` / `retentionDays` must
-     * be supplied (the server rejects an empty payload).
+     * be supplied (the server rejects an empty payload, so we fail
+     * client-side and save a round-trip).
      *
+     * @throws InvalidArgumentException when both arguments are null.
      * @return array<string, mixed> The updated project row.
      */
     public function updateProject(string $slug, string $projectId, ?string $name = null, ?int $retentionDays = null): array
@@ -169,6 +192,9 @@ final class User
         }
         if ($retentionDays !== null) {
             $body['retentionDays'] = $retentionDays;
+        }
+        if ($body === []) {
+            throw new InvalidArgumentException('updateProject requires at least one of $name or $retentionDays');
         }
         $resp = $this->http->patch($this->projectPath($slug, $projectId), $body);
         /** @var array<string, mixed> $project */
@@ -231,7 +257,12 @@ final class User
         if ($scope !== null) {
             $body['scope'] = $scope;
         }
-        return $this->http->post($this->projectPath($slug, $projectId) . '/keys', $body);
+        return $this->http->post(
+            $this->projectPath($slug, $projectId) . '/keys',
+            $body,
+            [],
+            idempotent: false,
+        );
     }
 
     /**
