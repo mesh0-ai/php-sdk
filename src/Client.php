@@ -13,6 +13,7 @@ use Mesh0\Metrics\MetricSink;
 use Mesh0\Resource\Alerts;
 use Mesh0\Resource\Events;
 use Mesh0\Resource\Meta;
+use Mesh0\Resource\PiiScrubbers;
 use Mesh0\Resource\Query;
 use Mesh0\Resource\Traces;
 use Mesh0\Resource\User;
@@ -50,6 +51,7 @@ final class Client
     public readonly Meta $meta;
     public readonly User $user;
     public readonly Alerts $alerts;
+    public readonly PiiScrubbers $piiScrubbers;
 
     private readonly Transport $transport;
     private ?Metrics $metrics = null;
@@ -67,6 +69,7 @@ final class Client
         $this->meta = new Meta($this->transport);
         $this->user = new User($this->transport);
         $this->alerts = new Alerts($this->transport);
+        $this->piiScrubbers = new PiiScrubbers($this->transport);
     }
 
     /** Convenience: build a client from an API key string and (optional) base URL. */
@@ -114,6 +117,11 @@ final class Client
     public function alerts(): Alerts
     {
         return $this->alerts;
+    }
+
+    public function piiScrubbers(): PiiScrubbers
+    {
+        return $this->piiScrubbers;
     }
 
     /**
