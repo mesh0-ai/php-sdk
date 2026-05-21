@@ -402,6 +402,38 @@ foreach ($mesh0->events->iterate() as $row) { /* … */ }
 
 ---
 
+## Control-plane resources
+
+Thin wrappers over the project- and user-scoped admin endpoints. Payloads
+are passed through as assoc arrays — see the backend route or each
+method's PHPDoc for accepted fields.
+
+```php
+// Alerts (project key, m0_… — POST sends Idempotency-Key automatically).
+$alerts   = $mesh0->alerts->listAlerts();
+$channels = $mesh0->alerts->listChannels();
+$mesh0->alerts->createAlert([/* AlertInput */]);
+
+// PII scrubbers (project key, requires pii:read / pii:write scopes).
+$rules = $mesh0->piiScrubbers->listScrubbers();
+$mesh0->piiScrubbers->createScrubber([
+    'name' => 'Credit cards', 'slug' => 'cc', 'kind' => 'regex',
+    'pattern' => '\d{13,19}', 'replacement' => '[CC]', 'scope' => ['data'],
+]);
+$mesh0->piiScrubbers->setMode('enforce'); // 'enforce' | 'audit' | 'off'
+
+// User / org / project management (user key, m0u_…).
+$me    = $mesh0->user->me();
+$keys  = $mesh0->user->listProjectKeys('acme', 'p_1');
+```
+
+POSTs that create resources without server-side `Idempotency-Key`
+middleware (`createScrubber`, `/v1/user/*` creates) are *not* retried —
+a transient 5xx would otherwise risk minting a duplicate. PATCH / PUT /
+DELETE retain the default retry policy.
+
+---
+
 ## Configuration
 
 ```php
