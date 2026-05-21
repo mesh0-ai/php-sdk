@@ -76,6 +76,16 @@ final class Transport
         return $this->request('PATCH', $path, [], $body, $headers, $idempotent);
     }
 
+    /**
+     * @param array<string, mixed>  $body
+     * @param array<string, string> $headers
+     * @return array<string, mixed>
+     */
+    public function put(string $path, array $body, array $headers = [], bool $idempotent = true): array
+    {
+        return $this->request('PUT', $path, [], $body, $headers, $idempotent);
+    }
+
     /** @return array<string, mixed> */
     public function delete(string $path): array
     {
