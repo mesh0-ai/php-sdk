@@ -9,24 +9,16 @@ use Mesh0\Http\Transport;
 /**
  * `/v1/pii-scrubbers` and `/v1/pii-scrub-mode` — project-scoped CRUD for
  * PII redaction rules and the project-wide enforcement switch. Auth is
- * the project API key (`m0_<routing>_<secret>`); the key's `pii:read`
- * and `pii:write` scopes are enforced server-side.
+ * the project API key (`m0_<routing>_<secret>`), with `pii:read` /
+ * `pii:write` scopes required on the key.
  *
- * Refs (`$ref`) may be either a UUID or the rule's slug — the backend
- * resolves both via `Service.LookupID`.
+ * `$ref` accepts either the rule's UUID or its slug.
  *
- * Wire shapes are snake_case, mirroring `internal/pii.Rule`. The
- * `RuleInput` PATCH semantics on the server are field-pointer based
+ * Wire shapes are snake_case. PATCH semantics are field-omission based
  * (omitted = unchanged); the SDK passes the payload through as an
- * opaque assoc array rather than promoting it into a PHP DTO so new
- * fields land without an SDK release.
+ * opaque assoc array so new server fields land without an SDK release.
  *
- * Unlike `/v1/alerts`, the scrubber create endpoint has no server-side
- * `Idempotency-Key` middleware, so the SDK opts out of automatic retry
- * on POST (same policy as `/v1/user/*` creates) — a retried 5xx could
- * otherwise mint a second rule the caller never sees. PATCH / DELETE /
- * PUT remain on the default retry path: they're operation-idempotent at
- * the API contract level.
+ * POST is not retried; PATCH / DELETE / PUT are.
  */
 final class PiiScrubbers
 {
@@ -76,11 +68,10 @@ final class PiiScrubbers
     }
 
     /**
-     * Create a scrubber rule. Disables retries — the endpoint has no
-     * `Idempotency-Key` middleware, so a transient 5xx retry could
+     * Create a scrubber rule. Not retried — a transient 5xx retry could
      * mint a duplicate rule.
      *
-     * @param array<string, mixed> $input RuleInput payload (see backend `pii.RuleInput`).
+     * @param array<string, mixed> $input
      * @return array<string, mixed> The created scrubber.
      */
     public function createScrubber(array $input): array
@@ -93,9 +84,8 @@ final class PiiScrubbers
 
     /**
      * Update a scrubber. PATCH semantics: omitted fields keep their
-     * existing values (see `RuleInput` in the backend). Built-in
-     * scrubbers can have `enabled` toggled but other fields are
-     * server-rejected with `builtin_immutable`.
+     * existing values. Built-in scrubbers accept `enabled` toggles only;
+     * other fields are server-rejected.
      *
      * @param array<string, mixed> $input
      * @return array<string, mixed>
@@ -109,8 +99,7 @@ final class PiiScrubbers
     }
 
     /**
-     * Delete a custom scrubber. Built-in scrubbers cannot be deleted —
-     * the server rejects with `builtin_immutable`.
+     * Delete a custom scrubber. Built-in scrubbers cannot be deleted.
      *
      * @return array<string, mixed>
      */

@@ -115,15 +115,45 @@ final class PiiScrubbersResourceTest extends TestCase
 
     public function testCreateScrubberDoesNotRetryOn5xx(): void
     {
-        // Single queued 503 — if retry were enabled the transport would
-        // dequeue twice and throw on the empty queue. With idempotent: false
-        // the call should fail through immediately on the first response.
+        // Use a transport that *would* retry if the call were idempotent —
+        // the assertion is that createScrubber passes idempotent: false
+        // through, so the single queued 503 is the only call made.
+        $factory = new HttpFactory();
+        $scrubbers = new PiiScrubbers(new Transport(
+            new Config(apiKey: 'm0_abcde_aaaaaaaaaaaaaaaaaaaaaaaa', maxRetries: 3),
+            $this->mock,
+            $factory,
+            $factory,
+        ));
         $this->mock->queueJson(503, ['error' => 'internal_error']);
 
-        $this->expectException(\Mesh0\Exception\ServerException::class);
-        $this->scrubbers->createScrubber(['name' => 'x']);
-
+        try {
+            $scrubbers->createScrubber(['name' => 'x']);
+            $this->fail('expected ServerException');
+        } catch (\Mesh0\Exception\ServerException) {
+            // expected
+        }
         $this->assertCount(1, $this->mock->requests);
+    }
+
+    public function testUpdateScrubberRetriesOn5xx(): void
+    {
+        // PATCH stays on the default retry path — a transient 5xx
+        // followed by 200 should surface the 200 to the caller.
+        $factory = new HttpFactory();
+        $scrubbers = new PiiScrubbers(new Transport(
+            new Config(apiKey: 'm0_abcde_aaaaaaaaaaaaaaaaaaaaaaaa', maxRetries: 2),
+            $this->mock,
+            $factory,
+            $factory,
+        ));
+        $this->mock->queueJson(503, ['error' => 'unavailable']);
+        $this->mock->queueJson(200, ['scrubber' => ['id' => 's_1', 'enabled' => false]]);
+
+        $s = $scrubbers->updateScrubber('s_1', ['enabled' => false]);
+
+        $this->assertCount(2, $this->mock->requests);
+        $this->assertSame(['id' => 's_1', 'enabled' => false], $s);
     }
 
     public function testUpdateScrubberPatchesPartialInput(): void
