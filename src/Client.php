@@ -15,7 +15,9 @@ use Mesh0\Resource\Events;
 use Mesh0\Resource\Meta;
 use Mesh0\Resource\PiiScrubbers;
 use Mesh0\Resource\Query;
+use Mesh0\Resource\Schema;
 use Mesh0\Resource\Traces;
+use Mesh0\Resource\Usage;
 use Mesh0\Resource\User;
 use Mesh0\Trace\Tracer;
 use Psr\Http\Client\ClientInterface;
@@ -52,6 +54,8 @@ final class Client
     public readonly User $user;
     public readonly Alerts $alerts;
     public readonly PiiScrubbers $piiScrubbers;
+    public readonly Schema $schema;
+    public readonly Usage $usage;
 
     private readonly Transport $transport;
     private ?Metrics $metrics = null;
@@ -70,6 +74,8 @@ final class Client
         $this->user = new User($this->transport);
         $this->alerts = new Alerts($this->transport);
         $this->piiScrubbers = new PiiScrubbers($this->transport);
+        $this->schema = new Schema($this->transport);
+        $this->usage = new Usage($this->transport);
     }
 
     /** Convenience: build a client from an API key string and (optional) base URL. */
@@ -122,6 +128,16 @@ final class Client
     public function piiScrubbers(): PiiScrubbers
     {
         return $this->piiScrubbers;
+    }
+
+    public function schema(): Schema
+    {
+        return $this->schema;
+    }
+
+    public function usage(): Usage
+    {
+        return $this->usage;
     }
 
     /**

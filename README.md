@@ -422,15 +422,27 @@ $mesh0->piiScrubbers->createScrubber([
 ]);
 $mesh0->piiScrubbers->setMode('enforce'); // 'enforce' | 'audit' | 'off'
 
+// Schema — aliases + promoted (typed) columns
+// (project key, requires schema:read / schema:write scopes).
+$mesh0->schema->createAlias('order_id', 'order.id', 'string');
+$mesh0->schema->promoteAlias('order_id'); // 202, status: "materializing"
+$mesh0->schema->cancelPromotion('order_id'); // KILL+DROP while materializing
+$mesh0->schema->demotePromoted('order_id');  // CH column retained for forensics
+
+// Usage read endpoints (project key, requires usage:read scope).
+$summary = $mesh0->usage->summary();         // current cap period
+$series  = $mesh0->usage->series('2026-01-01', '2026-04-01', 'month');
+
 // User / org / project management (user key, m0u_…).
 $me    = $mesh0->user->me();
 $keys  = $mesh0->user->listProjectKeys('acme', 'p_1');
 ```
 
 POSTs that create resources without server-side `Idempotency-Key`
-middleware (`createScrubber`, `/v1/user/*` creates) are *not* retried —
-a transient 5xx would otherwise risk minting a duplicate. PATCH / PUT /
-DELETE retain the default retry policy.
+middleware (`createScrubber`, schema `createAlias` / `promoteAlias` /
+`cancelPromotion`, `/v1/user/*` creates) are *not* retried — a transient
+5xx would otherwise risk minting a duplicate or replaying a destructive
+KILL+DROP. PATCH / PUT / DELETE retain the default retry policy.
 
 ---
 
