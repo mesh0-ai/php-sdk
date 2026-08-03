@@ -30,6 +30,38 @@ final class ConfigTest extends TestCase
         new Config(apiKey: 'sk-1234');
     }
 
+    public function testAcceptsAnOpenModeInstanceToken(): void
+    {
+        // An open-mode instance token has no prefix to check — it is a JWT
+        // minted by the operator's control plane, and in open mode it is the
+        // only credential a workspace has: it authenticates ingest AND the
+        // whole management API this SDK wraps. Rejecting it here made every
+        // management resource unreachable for an open-mode deployment.
+        $jwt = 'eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9'
+            . '.eyJpc3MiOiJ4YW5vIiwic3ViIjoiaW5zdC0xIn0'
+            . '.c2lnbmF0dXJlLWJ5dGVz';
+
+        $config = new Config(apiKey: $jwt);
+        $this->assertSame($jwt, $config->apiKey);
+    }
+
+    public function testRejectsPaddedBase64InAnInstanceToken(): void
+    {
+        // mesh0 requires UNPADDED base64url on the wire, so a padded token is
+        // malformed rather than merely unusual — it is rejected here, where
+        // the message names the problem, instead of as an opaque 401.
+        $this->expectException(ConfigurationException::class);
+        new Config(apiKey: 'eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiJhIn0=.c2ln');
+    }
+
+    public function testRejectsAThingThatMerelyContainsDots(): void
+    {
+        // The JWT arm is a shape check, not "anything with dots" — a hostname
+        // or a version string must still be caught at construction.
+        $this->expectException(ConfigurationException::class);
+        new Config(apiKey: 'api.mesh0.ai');
+    }
+
     public function testRejectsBadBaseUrl(): void
     {
         $this->expectException(ConfigurationException::class);
