@@ -6,6 +6,24 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+### Added
+
+- **`Config` accepts open-mode instance tokens.** A workspace-scoped instance
+  token authenticates the whole project-management API this SDK wraps, but
+  `Config` rejected any `apiKey` without an `m0_` / `m0u_` prefix — so a JWT
+  threw `ConfigurationException` at construction and every management resource
+  was unreachable for a cluster running open mode. Instance tokens are now a
+  third accepted credential shape alongside the two prefixes.
+
+  The check is deliberately a shape test, not a validation: three unpadded
+  base64url segments whose first decodes to a JOSE header carrying `alg`.
+  Signature, claims and expiry remain the server's to judge — it is the only
+  party holding the key. Decoding the header is what keeps the arm narrow;
+  counting segments alone would accept `api.mesh0.ai`. Padded base64 is
+  rejected, since mesh0 requires unpadded base64url on the wire.
+
+  Purely additive: every credential accepted before is still accepted.
+
 ## 1.3.0 — 2026-05-24
 
 ### Added

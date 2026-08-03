@@ -30,7 +30,8 @@ final class Config
     public readonly array $defaultHeaders;
 
     /**
-     * @param string                $apiKey          API key in the form `m0_<routing>_<secret>`.
+     * @param string                $apiKey          API key in the form `m0_<routing>_<secret>` or
+     *                                               `m0u_<secret>`, or an open-mode instance token (JWT).
      * @param string                $baseUrl         API base URL, no trailing slash.
      * @param float                 $timeout         Total request timeout, seconds.
      * @param float                 $connectTimeout  Connect timeout, seconds.
@@ -54,11 +55,38 @@ final class Config
         if ($apiKey === '') {
             throw new ConfigurationException('apiKey must not be empty');
         }
-        // Two key shapes share the same Bearer transport:
+        // Three credential shapes share the same Bearer transport:
         //   m0_<routing>_<secret>  — project-scoped (ingest, query, traces)
         //   m0u_<secret>           — user-scoped (/v1/user/* control plane)
-        if (!str_starts_with($apiKey, 'm0_') && !str_starts_with($apiKey, 'm0u_')) {
-            throw new ConfigurationException('apiKey must start with "m0_" or "m0u_"');
+        //   <header>.<claims>.<sig> — an open-mode instance token (JWT)
+        //
+        // The instance token is not an API key and has no prefix to check: it
+        // is a signed JWT minted by the operator's own control plane, and in
+        // open mode it is the ONLY credential in existence for a workspace —
+        // it materializes the project, writes its telemetry, and authenticates
+        // the whole management API (see open-mode-provisioning.md, "The
+        // management API"). Rejecting it here made every management route
+        // unreachable from this SDK for an open-mode deployment.
+        //
+        // The JWT arm is a SHAPE check, not a validation: three dot-separated
+        // unpadded base64url segments whose FIRST segment decodes to a JOSE
+        // header object. Signature and claims are the server's business and it
+        // holds the key; what this guards against is the same thing the
+        // prefixes do — a caller passing a password, a URL, or an empty-ish
+        // string and getting back a 401 they cannot read.
+        //
+        // Decoding the header is what makes the arm narrow enough to be worth
+        // having. Segment-counting alone accepts `api.mesh0.ai`, which is
+        // three dot-separated alphanumeric runs and is exactly the kind of
+        // mistake this check exists to catch. Note mesh0 requires UNPADDED
+        // base64url on the wire, so `=` is deliberately outside the class.
+        if (!str_starts_with($apiKey, 'm0_')
+            && !str_starts_with($apiKey, 'm0u_')
+            && !self::looksLikeInstanceToken($apiKey)
+        ) {
+            throw new ConfigurationException(
+                'apiKey must start with "m0_" or "m0u_", or be a JWT instance token'
+            );
         }
         if ($baseUrl === '' || !preg_match('#^https?://#', $baseUrl)) {
             throw new ConfigurationException('baseUrl must be an http(s) URL');
@@ -114,5 +142,37 @@ final class Config
             baseUrl: ($base === false || $base === '') ? self::DEFAULT_BASE_URL : $base,
             agentSocketPath: ($agentSocket === false || $agentSocket === '') ? null : $agentSocket,
         );
+    }
+
+    /**
+     * Does this credential have the shape of an open-mode instance token?
+     *
+     * Three unpadded base64url segments whose first decodes to a JOSE header
+     * object carrying `alg`. Deliberately says nothing about the signature,
+     * the claims, or whether the token is expired — all three are the
+     * server's to judge, and it is the only party holding the key.
+     */
+    private static function looksLikeInstanceToken(string $candidate): bool
+    {
+        if (!preg_match('#^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$#', $candidate)) {
+            return false;
+        }
+
+        $header = strtok($candidate, '.');
+        if ($header === false) {
+            return false;
+        }
+
+        // strtr + no padding: base64_decode tolerates the missing `=` in
+        // non-strict mode, and strict mode would reject the base64url
+        // alphabet outright.
+        $decoded = base64_decode(strtr($header, '-_', '+/'), false);
+        if ($decoded === false || $decoded === '') {
+            return false;
+        }
+
+        $parsed = json_decode($decoded, true);
+
+        return is_array($parsed) && isset($parsed['alg']);
     }
 }
