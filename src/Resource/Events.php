@@ -58,10 +58,45 @@ final class Events
         $defaultSocket = $this->config?->agentSocketPath;
 
         if ($socketPath !== null || $logger !== null) {
-            return new AgentEventSink($socketPath ?? $this->requireSocketPath($defaultSocket), $logger);
+            return new AgentEventSink(
+                $socketPath ?? $this->requireSocketPath($defaultSocket),
+                $logger,
+                $this->config?->agentProject,
+                $this->agentToken(),
+            );
         }
 
-        return $this->agentSink ??= new AgentEventSink($this->requireSocketPath($defaultSocket));
+        return $this->agentSink ??= new AgentEventSink(
+            $this->requireSocketPath($defaultSocket),
+            null,
+            $this->config?->agentProject,
+            $this->agentToken(),
+        );
+    }
+
+    /**
+     * The credential the agent should authenticate datagrams with, or null.
+     *
+     * An open-mode instance token is the ONLY credential a workspace has: the
+     * same JWT authenticates ingest and the management API, so a client
+     * already configured with one needs nothing further to emit through the
+     * agent. Wiring it here is what makes `Events::agent()` work in open mode
+     * with no extra configuration.
+     *
+     * An `m0_` project key is deliberately NOT forwarded. It would authorize
+     * the batch just as well, but it is the credential an operator publishes
+     * in the agent's KEYS FILE — sending it inline instead would bypass the
+     * routing table they configured and quietly change which pipeline the
+     * events land in. Callers who genuinely want that construct the sink
+     * directly with an explicit token.
+     */
+    private function agentToken(): ?string
+    {
+        $key = $this->config?->apiKey;
+        if ($key === null || !Config::isInstanceToken($key)) {
+            return null;
+        }
+        return $key;
     }
 
     private function requireSocketPath(?string $socketPath): string

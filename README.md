@@ -286,6 +286,47 @@ $agent->send(
 $agent->sendMany([$e1, $e2, $e3]);
 ```
 
+### Routing and credentials (multi-tenant / open mode)
+
+The agent routes each datagram by a top-level `_project`, and in open mode
+authenticates it with a top-level `_token` (metrics-agent >= 0.4.0). Both are
+stripped by the agent before forwarding, so neither reaches stored telemetry.
+
+Set the project with `MESH0_AGENT_PROJECT` (or `Config::$agentProject`).
+The credential is wired automatically when your `apiKey` **is** an open-mode
+instance token — in open mode the same JWT authenticates ingest and the
+management API, so a configured client needs nothing further:
+
+```bash
+export MESH0_API_KEY=eyJhbGciOiJFZERTQSJ9…   # instance token
+export MESH0_AGENT_PROJECT=workspace-42
+```
+
+An `m0_` project key is deliberately **not** forwarded inline. It would
+authorize the batch just as well, but it is the credential an operator
+publishes in the agent's *keys file* — sending it on the datagram instead
+bypasses the routing table they configured and quietly changes which pipeline
+the events land in.
+
+For a long-running worker, pass a **callable** rather than a string. An
+instance token is short lived (~15 minutes) and rotates, so a string captured
+at construction goes stale; the callable is invoked per send and should return
+your cached credential, not mint one:
+
+```php
+$agent = new Mesh0\Event\AgentEventSink(
+    '/run/mesh0/agent.sock',
+    logger: $psrLogger,
+    project: 'workspace-42',
+    token: fn (): ?string => $credentials->current(), // cheap, cached
+);
+```
+
+Returning `null` emits the event without a credential — the documented degrade
+when minting fails. An empty string is *not* sent: the agent reads a
+present-but-unusable credential as a hard drop (`drops.bad_token`), which is
+right for a malformed token and wrong for "this deployment does not use them".
+
 The socket is opened lazily on the first send. Datagrams larger than
 32KB are dropped with a single warning (pass a PSR-3 logger to observe),
 and transport errors are swallowed — `send()` never throws.
@@ -470,6 +511,7 @@ $mesh0 = new Client(new Config(
 | `MESH0_API_KEY`      | API key (`m0_<routing>_<secret>`). **Required.**                  |
 | `MESH0_BASE_URL`     | Override base URL (self-hosted deployments).                      |
 | `MESH0_AGENT_SOCKET` | Absolute path to the metrics-agent's Unix datagram socket. Required for `metrics()` / `events->agent()`. |
+| `MESH0_AGENT_PROJECT` | Project name stamped onto agent datagrams as `_project`, so a multi-tenant agent can route them. Leave unset for a single-tenant agent. |
 
 ### Custom HTTP client
 

@@ -112,4 +112,51 @@ final class ClientAgentSinkIntegrationTest extends TestCase
         }
         return null;
     }
+
+    public function testAgentSinkForwardsAnInstanceTokenAsTheDatagramCredential(): void
+    {
+        // In open mode the instance token is the ONLY credential a workspace
+        // has — the same JWT authenticates ingest and the management API — so
+        // a client already configured with one needs nothing further to emit.
+        $jwt = 'eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ4In0.c2ln';
+        $client = new Client(new Config(
+            apiKey: $jwt,
+            agentSocketPath: $this->sockPath,
+            agentProject: 'workspace-42',
+        ));
+
+        $client->events()->agent()->send(
+            Event::now()->withAttributes(['span.name' => 'charge']),
+        );
+
+        $packet = $this->receiveOnePacket();
+        self::assertNotNull($packet);
+        /** @var array<string, mixed> $decoded */
+        $decoded = \json_decode($packet, true, 512, \JSON_THROW_ON_ERROR);
+        self::assertSame('workspace-42', $decoded['_project']);
+        self::assertSame($jwt, $decoded['_token']);
+    }
+
+    public function testAgentSinkDoesNotForwardAProjectApiKey(): void
+    {
+        // An m0_ key is what an operator publishes in the agent's KEYS FILE.
+        // Sending it inline would bypass the routing table they configured
+        // and quietly change which pipeline the events land in.
+        $client = new Client(new Config(
+            apiKey: 'm0_routing_secret',
+            agentSocketPath: $this->sockPath,
+            agentProject: 'workspace-42',
+        ));
+
+        $client->events()->agent()->send(
+            Event::now()->withAttributes(['span.name' => 'charge']),
+        );
+
+        $packet = $this->receiveOnePacket();
+        self::assertNotNull($packet);
+        /** @var array<string, mixed> $decoded */
+        $decoded = \json_decode($packet, true, 512, \JSON_THROW_ON_ERROR);
+        self::assertSame('workspace-42', $decoded['_project']);
+        self::assertArrayNotHasKey('_token', $decoded);
+    }
 }

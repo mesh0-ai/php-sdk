@@ -138,6 +138,114 @@ final class AgentEventSinkTest extends TestCase
         new AgentEventSink('/' . str_repeat('a', 104));
     }
 
+    public function testStampsProjectAndTokenOnTheDatagram(): void
+    {
+        $sink = new AgentEventSink($this->sockPath, null, 'workspace-42', 'eyJhbGciOiJFZERTQSJ9.c.s');
+
+        $sink->send(Event::now()->withAttributes(['span.name' => 'charge']));
+
+        $packet = $this->receiveOnePacket();
+        self::assertNotNull($packet);
+        /** @var array<string, mixed> $decoded */
+        $decoded = \json_decode($packet, true, 512, \JSON_THROW_ON_ERROR);
+        self::assertSame('workspace-42', $decoded['_project']);
+        self::assertSame('eyJhbGciOiJFZERTQSJ9.c.s', $decoded['_token']);
+    }
+
+    public function testOmitsRoutingFieldsWhenNotConfigured(): void
+    {
+        // A single-tenant agent routes everything to its configured key; an
+        // empty `_token` would be read as a malformed credential and dropped.
+        $sink = new AgentEventSink($this->sockPath);
+
+        $sink->send(Event::now()->withAttributes(['span.name' => 'charge']));
+
+        $packet = $this->receiveOnePacket();
+        self::assertNotNull($packet);
+        /** @var array<string, mixed> $decoded */
+        $decoded = \json_decode($packet, true, 512, \JSON_THROW_ON_ERROR);
+        self::assertArrayNotHasKey('_project', $decoded);
+        self::assertArrayNotHasKey('_token', $decoded);
+    }
+
+    public function testResolvesTheTokenPerSend(): void
+    {
+        // An instance token rotates. A worker that captured one at
+        // construction would keep presenting it long after it expired.
+        $tokens = ['first', 'second', 'third'];
+        $calls = 0;
+        $sink = new AgentEventSink(
+            $this->sockPath,
+            null,
+            'workspace-42',
+            function () use ($tokens, &$calls): ?string {
+                return $tokens[$calls++] ?? null;
+            },
+        );
+
+        $seen = [];
+        foreach ([1, 2, 3] as $_) {
+            $sink->send(Event::now()->withAttributes(['span.name' => 'charge']));
+            $packet = $this->receiveOnePacket();
+            self::assertNotNull($packet);
+            /** @var array<string, mixed> $decoded */
+            $decoded = \json_decode($packet, true, 512, \JSON_THROW_ON_ERROR);
+            $seen[] = $decoded['_token'];
+        }
+
+        self::assertSame(['first', 'second', 'third'], $seen);
+        self::assertSame(3, $calls);
+    }
+
+    public function testOmitsTokenWhenTheProviderReturnsNull(): void
+    {
+        // Minting failed. Emitting without a credential is the documented
+        // degrade; emitting an empty one would be a hard drop at the agent.
+        $sink = new AgentEventSink($this->sockPath, null, 'workspace-42', fn (): ?string => null);
+
+        $sink->send(Event::now()->withAttributes(['span.name' => 'charge']));
+
+        $packet = $this->receiveOnePacket();
+        self::assertNotNull($packet);
+        /** @var array<string, mixed> $decoded */
+        $decoded = \json_decode($packet, true, 512, \JSON_THROW_ON_ERROR);
+        self::assertSame('workspace-42', $decoded['_project']);
+        self::assertArrayNotHasKey('_token', $decoded);
+    }
+
+    public function testRoutingFieldsWinOverCollidingEventAttributes(): void
+    {
+        // `_project` / `_token` are wire fields owned by the sink/agent
+        // contract. An event that carried one would otherwise silently
+        // re-route or re-authenticate itself.
+        $sink = new AgentEventSink($this->sockPath, null, 'workspace-42', 'real-token');
+
+        $sink->send(Event::now()->withAttributes([
+            '_project' => 'attacker-project',
+            '_token' => 'attacker-token',
+        ]));
+
+        $packet = $this->receiveOnePacket();
+        self::assertNotNull($packet);
+        /** @var array<string, mixed> $decoded */
+        $decoded = \json_decode($packet, true, 512, \JSON_THROW_ON_ERROR);
+        self::assertSame('workspace-42', $decoded['_project']);
+        self::assertSame('real-token', $decoded['_token']);
+    }
+
+    public function testRejectsAnEmptyProject(): void
+    {
+        $this->expectException(ConfigurationException::class);
+        new AgentEventSink($this->sockPath, null, '');
+    }
+
+    public function testRejectsANonStringNonCallableToken(): void
+    {
+        $this->expectException(ConfigurationException::class);
+        /** @phpstan-ignore-next-line intentionally wrong type */
+        new AgentEventSink($this->sockPath, null, null, 42);
+    }
+
     private function receiveOnePacket(int $timeoutMs = 500): ?string
     {
         \assert(\is_resource($this->server));
