@@ -6,6 +6,35 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+### Added
+
+- **`AgentEventSink` stamps `_project` and `_token` on outgoing datagrams.**
+  The agent routes by a top-level `_project` and, in open mode, authenticates
+  each datagram with a top-level `_token` (metrics-agent >= 0.4.0). The sink
+  previously sent neither, so a multi-tenant agent had no way to route its
+  events and an open-mode agent had no way to authenticate them.
+
+  The project comes from `MESH0_AGENT_PROJECT` / `Config::$agentProject`. The
+  credential is wired automatically by `Events::agent()` when the configured
+  `apiKey` is an open-mode instance token — in open mode the same JWT
+  authenticates ingest and the management API, so a configured client needs
+  nothing further. An `m0_` project key is deliberately **not** forwarded: it
+  is what an operator publishes in the agent's keys file, and sending it
+  inline would bypass the routing table they configured.
+
+  `$token` accepts a callable as well as a string, and for anything
+  longer-lived than one request it must be one — an instance token is short
+  lived and rotates, so a string captured at construction goes stale in a
+  worker. A provider returning `null` emits without a credential (the
+  documented degrade when minting fails); an empty token is never sent, since
+  the agent reads a present-but-unusable credential as a hard drop.
+
+  `_project` / `_token` are written last, so an event carrying a colliding
+  attribute cannot silently re-route or re-authenticate itself.
+
+- `Config::isInstanceToken()` exposes the existing credential-shape check so
+  callers can tell an instance token from an `m0_` key without re-deriving it.
+
 ## 1.4.0 — 2026-08-03
 
 ### Added

@@ -41,6 +41,10 @@ final class Config
      * @param string|null           $agentSocketPath Absolute Unix-domain socket path of the local
      *                                               metrics-agent. Required when using `Client::metrics()`
      *                                               or `Events::agent()`; leave `null` otherwise.
+     * @param string|null           $agentProject    Project name stamped onto agent datagrams as
+     *                                               `_project`, so a multi-tenant agent can route them.
+     *                                               Leave `null` for a single-tenant agent, which routes
+     *                                               everything to its configured default key.
      */
     public function __construct(
         public readonly string $apiKey,
@@ -51,6 +55,7 @@ final class Config
         public readonly string $userAgent = self::DEFAULT_USER_AGENT,
         array $defaultHeaders = [],
         public readonly ?string $agentSocketPath = null,
+        public readonly ?string $agentProject = null,
     ) {
         if ($apiKey === '') {
             throw new ConfigurationException('apiKey must not be empty');
@@ -124,9 +129,11 @@ final class Config
     /**
      * Build a config from environment variables.
      *
-     * Reads `MESH0_API_KEY` (required), `MESH0_BASE_URL` (optional), and
-     * `MESH0_AGENT_SOCKET` (optional) — the datagram sinks need the last
-     * one set; leave it unset if you only use HTTPS resources.
+     * Reads `MESH0_API_KEY` (required), `MESH0_BASE_URL` (optional),
+     * `MESH0_AGENT_SOCKET` (optional) — the datagram sinks need that one set;
+     * leave it unset if you only use HTTPS resources — and
+     * `MESH0_AGENT_PROJECT` (optional), which names the project the agent
+     * should route datagrams to.
      */
     public static function fromEnv(): self
     {
@@ -136,11 +143,13 @@ final class Config
         }
         $base = getenv('MESH0_BASE_URL');
         $agentSocket = getenv('MESH0_AGENT_SOCKET');
+        $agentProject = getenv('MESH0_AGENT_PROJECT');
 
         return new self(
             apiKey: $key,
             baseUrl: ($base === false || $base === '') ? self::DEFAULT_BASE_URL : $base,
             agentSocketPath: ($agentSocket === false || $agentSocket === '') ? null : $agentSocket,
+            agentProject: ($agentProject === false || $agentProject === '') ? null : $agentProject,
         );
     }
 
@@ -152,6 +161,11 @@ final class Config
      * the claims, or whether the token is expired — all three are the
      * server's to judge, and it is the only party holding the key.
      */
+    public static function isInstanceToken(string $candidate): bool
+    {
+        return self::looksLikeInstanceToken($candidate);
+    }
+
     private static function looksLikeInstanceToken(string $candidate): bool
     {
         if (!preg_match('#^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$#', $candidate)) {

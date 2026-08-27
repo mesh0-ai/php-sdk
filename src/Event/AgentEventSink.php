@@ -18,6 +18,19 @@ use Psr\Log\NullLogger;
  * handlers, CLI workers) where an HTTPS roundtrip per event is
  * unaffordable.
  *
+ ## Routing and credentials
+ *
+ * The agent routes each datagram by a top-level `_project` and, in open
+ * mode, authenticates it with a top-level `_token` (metrics-agent >= 0.4.0).
+ * Both are stripped by the agent before it forwards the event, so neither
+ * reaches stored telemetry.
+ *
+ * `$token` accepts a callable as well as a string, and for anything longer
+ * than one request it must be one: an open-mode instance token is short
+ * lived (~15 minutes) and rotates, so a string captured at construction
+ * goes stale in any long-running worker. The callable is invoked per send —
+ * it should be cheap and return the cached credential, not mint one.
+ *
  * The socket is opened lazily on the first `send()` so constructing a
  * sink performs zero I/O. Send errors are intentionally swallowed
  * (datagrams are at-most-once); an optional PSR-3 logger receives a
@@ -48,10 +61,23 @@ final class AgentEventSink implements EventSink
 
     private readonly LoggerInterface $logger;
 
+    /**
+     * @param string|(callable():?string)|null $token Credential for the agent
+     *        to authenticate this datagram with. Pass a callable for anything
+     *        longer-lived than a single request — see the class docblock.
+     */
     public function __construct(
         private readonly string $socketPath,
         ?LoggerInterface $logger = null,
+        private readonly ?string $project = null,
+        private $token = null,
     ) {
+        if ($project !== null && $project === '') {
+            throw new ConfigurationException('project must be a non-empty string or null');
+        }
+        if ($token !== null && !\is_string($token) && !\is_callable($token)) {
+            throw new ConfigurationException('token must be a string, a callable returning ?string, or null');
+        }
         if ($socketPath === '' || $socketPath[0] !== '/') {
             throw new ConfigurationException('socketPath must be an absolute filesystem path');
         }
@@ -72,7 +98,7 @@ final class AgentEventSink implements EventSink
 
         try {
             $payload = \json_encode(
-                $e->toArray(),
+                $this->withRouting($e->toArray()),
                 \JSON_UNESCAPED_SLASHES | \JSON_UNESCAPED_UNICODE | \JSON_THROW_ON_ERROR,
             );
         } catch (\JsonException $ex) {
@@ -119,6 +145,34 @@ final class AgentEventSink implements EventSink
             return;
         }
         $this->writeFailureWarned = false;
+    }
+
+    /**
+     * Merge the routing fields into the outgoing datagram.
+     *
+     * Written LAST so they win over an event that happens to carry a
+     * colliding attribute — `_project` and `_token` are wire fields owned by
+     * the sink/agent contract, not event data, and an event that set one
+     * would otherwise silently re-route or re-authenticate itself.
+     *
+     * An empty or null token is omitted rather than sent as `""`: the agent
+     * reads a present-but-unusable credential as a hard drop
+     * (`drops.bad_token`), which is the right answer for a malformed token
+     * and the wrong one for "this deployment does not use them".
+     *
+     * @param  array<string, mixed> $event
+     * @return array<string, mixed>
+     */
+    private function withRouting(array $event): array
+    {
+        if ($this->project !== null) {
+            $event['_project'] = $this->project;
+        }
+        $token = \is_callable($this->token) ? ($this->token)() : $this->token;
+        if (\is_string($token) && $token !== '') {
+            $event['_token'] = $token;
+        }
+        return $event;
     }
 
     /**

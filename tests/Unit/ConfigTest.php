@@ -129,4 +129,34 @@ final class ConfigTest extends TestCase
             \putenv('MESH0_API_KEY');
         }
     }
+
+    public function testAgentProjectDefaultsToNull(): void
+    {
+        $cfg = new Config(apiKey: 'm0_abc_def');
+        self::assertNull($cfg->agentProject);
+    }
+
+    public function testFromEnvReadsAgentProject(): void
+    {
+        putenv('MESH0_API_KEY=m0_abc_def');
+        putenv('MESH0_AGENT_PROJECT=workspace-42');
+        try {
+            $cfg = Config::fromEnv();
+            self::assertSame('workspace-42', $cfg->agentProject);
+        } finally {
+            putenv('MESH0_API_KEY');
+            putenv('MESH0_AGENT_PROJECT');
+        }
+    }
+
+    public function testIsInstanceTokenDistinguishesCredentialShapes(): void
+    {
+        $jwt = 'eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ4In0.c2ln';
+        self::assertTrue(Config::isInstanceToken($jwt));
+        self::assertFalse(Config::isInstanceToken('m0_routing_secret'));
+        self::assertFalse(Config::isInstanceToken('m0u_secret'));
+        // The case the shape check exists to catch: three dot-separated
+        // alphanumeric runs that are not a token at all.
+        self::assertFalse(Config::isInstanceToken('api.mesh0.ai'));
+    }
 }
