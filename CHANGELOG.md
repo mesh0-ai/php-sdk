@@ -6,6 +6,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+## 1.5.0 — 2026-08-27
+
 ### Added
 
 - **`AgentEventSink` stamps `_project` and `_token` on outgoing datagrams.**
