@@ -55,19 +55,24 @@ final class Alerts
 
     /**
      * Create an alert. The transport's automatic 5xx/429 retry would
-     * otherwise risk double-create, so the SDK always sends an
-     * `Idempotency-Key` — caller-supplied if `$idempotencyKey` is set,
-     * otherwise a per-call random value. A replay with the same key and
-     * body returns the cached response; the same key with a different
-     * body 409s as `idempotency_key_conflict`.
+     * otherwise risk double-create, so the SDK sends an `Idempotency-Key`:
+     * caller-supplied if `$idempotencyKey` is set, otherwise a per-call
+     * random value. A replay with the same key and body returns the cached
+     * response; the same key with a different body 409s as
+     * `idempotency_key_conflict`.
+     *
+     * On an open-mode instance token the server refuses the header
+     * (`400 idempotency_unsupported`), so with no caller key the SDK sends
+     * none and makes the call without retry instead. A caller-supplied key
+     * is always forwarded.
      *
      * @param array<string, mixed> $input AlertInput payload (see backend `alerts.AlertInput`).
      * @return array<string, mixed> The created alert.
      */
     public function createAlert(array $input, ?string $idempotencyKey = null): array
     {
-        $headers = ['Idempotency-Key' => $idempotencyKey ?? $this->randomIdempotencyKey()];
-        $resp = $this->http->post('/v1/alerts', $input, $headers);
+        [$headers, $idempotent] = $this->createRequestOptions($idempotencyKey);
+        $resp = $this->http->post('/v1/alerts', $input, $headers, $idempotent);
         /** @var array<string, mixed> $alert */
         $alert = is_array($resp['alert'] ?? null) ? $resp['alert'] : [];
         return $alert;
@@ -148,15 +153,16 @@ final class Alerts
     /**
      * Create a channel. Same `Idempotency-Key` contract as `createAlert()`
      * — caller-supplied key wins, otherwise the SDK generates one so
-     * transport retries never double-create.
+     * transport retries never double-create (or, on an instance token,
+     * sends none and does not retry).
      *
      * @param array<string, mixed> $input ChannelInput payload.
      * @return array<string, mixed>
      */
     public function createChannel(array $input, ?string $idempotencyKey = null): array
     {
-        $headers = ['Idempotency-Key' => $idempotencyKey ?? $this->randomIdempotencyKey()];
-        $resp = $this->http->post('/v1/alert-channels', $input, $headers);
+        [$headers, $idempotent] = $this->createRequestOptions($idempotencyKey);
+        $resp = $this->http->post('/v1/alert-channels', $input, $headers, $idempotent);
         /** @var array<string, mixed> $channel */
         $channel = is_array($resp['channel'] ?? null) ? $resp['channel'] : [];
         return $channel;
@@ -192,6 +198,21 @@ final class Alerts
     public function testFireChannel(string $ref): array
     {
         return $this->http->post('/v1/alert-channels/' . rawurlencode($ref) . '/test', null, [], idempotent: false);
+    }
+
+    /**
+     * Headers and retry mode for a keyed create. Retrying is only safe while
+     * a key is sent, so the one case that sends none (an instance token with
+     * no caller key) also turns retry off.
+     *
+     * @return array{array<string, string>, bool}
+     */
+    private function createRequestOptions(?string $idempotencyKey): array
+    {
+        if ($idempotencyKey === null && $this->http->usesInstanceToken()) {
+            return [[], false];
+        }
+        return [['Idempotency-Key' => $idempotencyKey ?? $this->randomIdempotencyKey()], true];
     }
 
     /**

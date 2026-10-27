@@ -96,7 +96,10 @@ test-fires that send real notifications) must call the transport with
 5xx/429 on that one call. Endpoints with server-side `Idempotency-Key`
 support (`POST /v1/alerts`, `POST /v1/alert-channels`) should always
 send the header (auto-generate when the caller doesn't supply one) so
-the default retry behavior stays safe.
+the default retry behavior stays safe. The exception is an open-mode
+instance token (`Transport::usesInstanceToken()`): the server refuses the
+header there (`400 idempotency_unsupported`), so with no caller key the
+create sends none and runs with `idempotent: false`.
 
 ## Error mapping
 

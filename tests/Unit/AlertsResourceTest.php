@@ -6,6 +6,7 @@ namespace Mesh0\Tests\Unit;
 
 use GuzzleHttp\Psr7\HttpFactory;
 use Mesh0\Config;
+use Mesh0\Exception\ServerException;
 use Mesh0\Http\Transport;
 use Mesh0\Resource\Alerts;
 use Mesh0\Tests\Support\MockHttpClient;
@@ -92,6 +93,73 @@ final class AlertsResourceTest extends TestCase
         $second = $this->mock->lastRequest()->getHeaderLine('Idempotency-Key');
 
         $this->assertNotSame($first, $second);
+    }
+
+    public function testCreateAlertOnInstanceTokenSendsNoIdempotencyKey(): void
+    {
+        $alerts = $this->instanceTokenAlerts(maxRetries: 0);
+        $this->mock->queueJson(201, ['alert' => ['id' => 'a_new']]);
+
+        $a = $alerts->createAlert(['name' => 'spike']);
+
+        $req = $this->mock->lastRequest();
+        $this->assertSame('/v1/alerts', $req->getUri()->getPath());
+        $this->assertFalse($req->hasHeader('Idempotency-Key'));
+        $this->assertSame(['id' => 'a_new'], $a);
+    }
+
+    public function testCreateChannelOnInstanceTokenSendsNoIdempotencyKey(): void
+    {
+        $alerts = $this->instanceTokenAlerts(maxRetries: 0);
+        $this->mock->queueJson(201, ['channel' => ['id' => 'c_new']]);
+
+        $c = $alerts->createChannel(['name' => 'ops', 'type' => 'email']);
+
+        $req = $this->mock->lastRequest();
+        $this->assertSame('/v1/alert-channels', $req->getUri()->getPath());
+        $this->assertFalse($req->hasHeader('Idempotency-Key'));
+        $this->assertSame(['id' => 'c_new'], $c);
+    }
+
+    public function testCreateOnInstanceTokenWithoutKeyDoesNotRetry(): void
+    {
+        // No key means a retried create would land twice, so a 5xx must
+        // fail through on the first attempt even with retries configured.
+        $alerts = $this->instanceTokenAlerts(maxRetries: 3);
+        $this->mock->queueJson(503, ['error' => 'unavailable']);
+        $this->mock->queueJson(201, ['channel' => ['id' => 'c_dup']]);
+
+        try {
+            $alerts->createChannel(['name' => 'ops', 'type' => 'email']);
+            $this->fail('expected the 503 to fail through');
+        } catch (ServerException) {
+        }
+
+        $this->assertCount(1, $this->mock->requests);
+    }
+
+    public function testCreateOnInstanceTokenForwardsCallerKey(): void
+    {
+        $alerts = $this->instanceTokenAlerts(maxRetries: 0);
+        $this->mock->queueJson(201, ['alert' => ['id' => 'a_new']]);
+
+        $alerts->createAlert(['name' => 'spike'], idempotencyKey: 'req-123');
+
+        $this->assertSame('req-123', $this->mock->lastRequest()->getHeaderLine('Idempotency-Key'));
+    }
+
+    private function instanceTokenAlerts(int $maxRetries): Alerts
+    {
+        $factory = new HttpFactory();
+        return new Alerts(new Transport(
+            new Config(
+                apiKey: 'eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ4In0.c2ln',
+                maxRetries: $maxRetries,
+            ),
+            $this->mock,
+            $factory,
+            $factory,
+        ));
     }
 
     public function testCreateAlertForwardsIdempotencyKey(): void
