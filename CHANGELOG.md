@@ -6,6 +6,18 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+### Fixed
+
+- **`createAlert()` / `createChannel()` work on an open-mode instance token.**
+  Both always sent an `Idempotency-Key`, generating one when the caller passed
+  none, and the server refuses that header for an instance token
+  (`400 idempotency_unsupported`: it stores replays against an API-key record
+  the token does not have). So every create on that credential failed. With an
+  instance token and no caller key, the SDK now sends no header and makes the
+  call without retry, so a 5xx or 429 cannot double-create. API keys are
+  unchanged, and a caller-supplied key is still forwarded on either credential.
+  Adds `Transport::usesInstanceToken()`.
+
 ## 1.5.0 — 2026-08-27
 
 ### Added

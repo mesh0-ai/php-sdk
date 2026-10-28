@@ -44,6 +44,17 @@ final class Transport
     }
 
     /**
+     * Is the configured credential an open-mode instance token rather than
+     * an API key? The server stores `Idempotency-Key` replays against an
+     * API-key record, which an instance token does not have, so it refuses
+     * the header (`400 idempotency_unsupported`) on that credential.
+     */
+    public function usesInstanceToken(): bool
+    {
+        return Config::isInstanceToken($this->config->apiKey);
+    }
+
+    /**
      * @param array<string, scalar|null> $query
      * @return array<string, mixed>
      */
